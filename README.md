@@ -147,7 +147,7 @@ For local-only work, create an ignored `.dev.vars` containing `DEV_AUTH_EMAIL=de
 
 For every future patch: update tests, update this README when behaviour/setup changes, review the exact diff for secrets/confidential data, and commit/push to `git@github.com:sanjayws/presskit.git` over SSH. The standing contributor instructions are in [AGENTS.md](AGENTS.md). CI runs tests, a publication scan and a bundle check; it does not deploy or require production secrets.
 
-Run `node scripts/check-public.mjs` on the publication tree before pushing. If working in a private operational directory, use `node scripts/export-public.mjs /path/to/clean-checkout` to copy only the maintained source allowlist; it never copies live Wrangler config, internal audits, uploads or local state. Inspect `git diff --cached` before every push. A scan is an additional check, not a substitute for reviewing content.
+Run `node scripts/check-public.mjs` on the publication tree before pushing. It checks both staged Git content and working files, including untracked files. If working in a private operational directory, use `node scripts/export-public.mjs /path/to/clean-checkout` to copy only the maintained source allowlist into a clean checkout; uncommitted changes and destination symlinks stop the export before copying. The helper never copies live Wrangler config, internal audits, uploads or local state. Inspect `git diff --cached` before every push. A scan is an additional check, not a substitute for reviewing content.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and [CONTRIBUTING.md](CONTRIBUTING.md) for checks. MIT licensed; third-party notices remain in [vendor/](vendor/).
 

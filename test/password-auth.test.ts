@@ -40,6 +40,12 @@ describe("administrator-managed password login",()=>{
     for(let i=0;i<10;i++)expect((await login(email)).status).toBe(401);
     const response=await login(email);expect(response.status).toBe(429);expect(response.headers.get("retry-after")).toBe("900");
   });
+  it("rejects oversized login bodies and unsupported encodings before authentication",async()=>{
+    const oversized=await worker.fetch(new Request("https://x.test/auth/password",{method:"POST",headers:{origin:"https://x.test"},body:new URLSearchParams({email:"test@example.com",password:"x".repeat(5000)})}),bindings);
+    expect(oversized.status).toBe(413);
+    const json=await worker.fetch(new Request("https://x.test/auth/password",{method:"POST",headers:{origin:"https://x.test","content-type":"application/json"},body:'{}'}),bindings);
+    expect(json.status).toBe(415);
+  });
   it("respects the domain restriction and disabled feature flag",async()=>{
     const email=await account();
     const req=()=>new Request("https://x.test/auth/password",{method:"POST",headers:{origin:"https://x.test"},body:new URLSearchParams({email,password})});

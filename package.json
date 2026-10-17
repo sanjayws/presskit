@@ -10,11 +10,12 @@
     "lint": "eslint src",
     "cf-typegen": "wrangler types src/worker-bindings.d.ts --env-interface WorkerBindings --include-runtime false --strict-vars false",
     "audit": "npm audit --audit-level=high",
-    "pretest": "npm run skills:verify",
+    "pretest": "npm run skills:verify && npm run test:publication",
     "test": "vitest run",
     "skills:verify": "node scripts/verify-marketing-skills.mjs",
     "migrate:local": "wrangler d1 migrations apply blog_studio --local",
-    "migrate:remote": "wrangler d1 migrations apply blog_studio --remote"
+    "migrate:remote": "wrangler d1 migrations apply blog_studio --remote",
+    "test:publication": "node --test scripts/publication-checks.mjs"
   },
   "dependencies": {
     "cfb": "1.2.2",

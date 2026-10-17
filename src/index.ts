@@ -67,6 +67,7 @@ import { historyScreen } from "./ui/history";
 
 type Vars = { user: User; nonce: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
+app.use("/auth/password", bodyLimit({ maxSize: 4096, onError: (c) => c.text("Login submission too large.", 413) }));
 app.use("*", bodyLimit({ maxSize: 11_000_000, onError: (c) => c.text("This submission is too large. Use a document of up to 10 MB.", 413) }));
 
 function contentSecurityPolicy(nonce: string): string {
@@ -108,6 +109,7 @@ app.post("/auth/password", async (c) => {
   c.header("Cache-Control", "no-store");
   if (!passwordConfigured(c.env)) return c.text("Password login is not enabled.", 503);
   if (c.req.header("origin") !== new URL(c.req.url).origin) return c.text("Sign in from this site's login page.", 403);
+  if (!c.req.header("content-type")?.toLowerCase().startsWith("application/x-www-form-urlencoded")) return c.text("Use the sign-in form to log in.", 415);
   const raw = await c.req.text();
   if (raw.length > 4096) return c.text("Login submission too large.", 413);
   const form = new URLSearchParams(raw);
