@@ -46,6 +46,16 @@ describe("evidence-led image composition", () => {
     expect(prompt).toContain("sourceQuote");
     expect(prompt).toContain("callouts are optional");
   });
+  it("protects key content from wide preview crops on landscape and square canvases", () => {
+    for (const outputFormat of ["html", "email", "linkedin", "chat"] as const) {
+      const prompt = featuredImagePrompt(validateComposition(composition, sourceText), { title: "Pilot", sourceText, outputFormat });
+      expect(prompt).toContain(outputFormat === "html" || outputFormat === "email" ? "top 20% and bottom 20%" : "top 30% and bottom 30%");
+      expect(prompt).toContain("10% on the left and right");
+      expect(prompt).toContain("ALL essential subject details");
+      expect(prompt).toContain("not a literal white border");
+      expect(prompt).not.toContain("8% safe margins");
+    }
+  });
   it("requires distinct creative alternatives and a valid selected direction", () => {
     expect(() => validateComposition({ ...composition, selectedConcept: 3 }, sourceText)).toThrow(/art direction/);
     expect(() => validateComposition({ ...composition, concepts: Array(3).fill(composition.concepts[0]) }, sourceText)).toThrow(/distinct concepts/);
@@ -71,7 +81,7 @@ async function makeImageRun() {
 }
 
 function mockPlan() {
-  fetchMock.get("https://api.anthropic.com").intercept({ path: "/v1/messages", method: "POST" })
+  fetchMock.get("https://api.anthropic.com").intercept({ path: "/v1/messages", method: "POST", body: body => String(body).includes("OPEN GRAPH SAFE AREA") })
     .reply(200, { type: "message", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(composition) }] });
 }
 
@@ -98,9 +108,12 @@ describe("image stage cost control and graceful failure", () => {
     expect((await runs.get(env.DB, item.runId))?.state).toBe("asset_gen");
     const cached = await env.ASSETS.get(`articles/${item.articleId}/image-brief.json`);
     expect(cached).not.toBeNull();
-    expect(await cached!.text()).toContain("sourceQuote");
-    // No second OpenAI text intercept: replanning here would fail this test.
-    fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST" }).reply(200, { data: [{ b64_json: png }] });
+    const previous = await cached!.json<Record<string, unknown>>();
+    expect(JSON.stringify(previous)).toContain("sourceQuote");
+    previous.version = "2026-10-15.2";
+    await env.ASSETS.put(`articles/${item.articleId}/image-brief.json`, JSON.stringify(previous));
+    // No second planner intercept: a legacy retry must receive safe framing without replanning.
+    fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST", body: body => String(body).includes("top 20% and bottom 20%") }).reply(200, { data: [{ b64_json: png }] });
     await stageImage(env, item.runId, 2);
     expect((await runs.get(env.DB, item.runId))?.state).toBe("ready");
     expect((await articles.get(env.DB, item.articleId))?.png_r2_key).toBe(`articles/${item.articleId}/featured.png`);

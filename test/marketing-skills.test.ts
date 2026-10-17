@@ -242,7 +242,7 @@ describe("skills reach real generation request paths", () => {
     expect(result.prompt).toContain("never paragraphs or tiny text");
     expect(result.prompt).toContain("1536x1024");
     expect(result.prompt).not.toContain("Ideogram");
-    expect(IMAGE_PROMPT_VERSION).toBe("2026-10-15.2");
+    expect(IMAGE_PROMPT_VERSION).toBe("2026-10-17.1");
   });
 
   it("keeps malicious visual preferences in the data block, not the reviewed skills", () => {

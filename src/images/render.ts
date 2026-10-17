@@ -7,7 +7,7 @@ import { optionInstruction, IMAGE_STYLES, channelProfile, isOutputFormat } from 
 import { recordOf } from "../providers/http";
 import { generateImage } from "../openai/image";
 import { logEvent } from "../log";
-import { featuredImagePrompt, planFeaturedImage, validateComposition, IMAGE_PROMPT_VERSION, IMAGE_SOURCE_LIMIT } from "./brief";
+import { featuredImagePrompt, planFeaturedImage, validateComposition, IMAGE_PROMPT_VERSION, COMPATIBLE_IMAGE_BRIEF_VERSIONS, IMAGE_SOURCE_LIMIT } from "./brief";
 
 export async function renderFeaturedVisual(env: Env, article: Article, campaign: Campaign | null, options: {
   pngKey: string;
@@ -35,7 +35,7 @@ export async function renderFeaturedVisual(env: Env, article: Article, campaign:
     if (!cached || cached.size > 32_000) continue;
     try {
       const value = recordOf(await cached.json<unknown>());
-      if (value.version === IMAGE_PROMPT_VERSION && value.model === model && value.inputHash === inputHash) {
+      if (typeof value.version === "string" && COMPATIBLE_IMAGE_BRIEF_VERSIONS.has(value.version) && value.model === model && value.inputHash === inputHash) {
         const composition = validateComposition(value.composition, input.sourceText.slice(0, IMAGE_SOURCE_LIMIT));
         planned = { composition, prompt: featuredImagePrompt(composition, input) };
         break;

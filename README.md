@@ -5,7 +5,7 @@ A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build w
 - Checks whether sources support the brief before writing.
 - Plans, writes, independently reviews and revises drafts with bounded retries.
 - Runs in background queues with saved checkpoints and recovery.
-- Generates channel-sized images and keeps previous versions.
+- Generates channel-sized images and keeps previous versions. Planning and rendering prompts reserve crop-safe background: 20% at the top/bottom for landscape images, 30% for square images, and 10% at either side. Important subjects and text stay in the central area; verify the actual destination preview because image-model adherence and platform crops vary.
 - Organises history into groups and archives; supports selective deletion.
 - Supports **administrator-created email/password accounts in D1**, Google sign-in, or both.
 
