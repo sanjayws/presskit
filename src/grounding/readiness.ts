@@ -1,3 +1,4 @@
+import { selectedChannels } from "../style/channels";
 import type { Env } from "../env";
 import type { Campaign } from "../db/repos";
 import { groundingEvidenceForRun, loadSourceReport } from "./report";
@@ -33,7 +34,7 @@ export async function assessReadiness(env: Env, campaign: Campaign, runId: strin
   const sources = await loadSourceReport(env, runId);
   const evidence = sources.some((source) => source.status === "loaded") ? await groundingEvidenceForRun(env, campaign, runId) : null;
   const input = JSON.stringify({ brief: campaign.idea, mustCover: campaign.include_ideas, avoid: campaign.exclude_ideas,
-    destination: campaign.output_format, channel: channelProfile(campaign.output_format).summary,
+    destinations: selectedChannels(campaign.output_format, campaign.output_formats).map((format) => ({ destination: format, channel: channelProfile(format).summary, maxWords: Math.min(campaign.max_words, channelProfile(format).maxWords) })),
     maxWords: Math.min(campaign.max_words, channelProfile(campaign.output_format).maxWords),
     sources, evidence: evidence?.sources ?? [],
   });

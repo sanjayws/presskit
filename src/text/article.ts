@@ -144,7 +144,7 @@ export function biasInstruction(level: number): string {
 /** Owner editorial directives: what to include, what to exclude, and the bias stance. */
 export function editorialBlock(input: ArticleInput): string {
   const parts: string[] = [];
-  if (input.originalBrief) parts.push(`Original owner brief (deliverable instructions; claims are not evidence): ${JSON.stringify(input.originalBrief)}\nPreserve every requested point, explicit heading, section placement and sequence. The selected angle refines this brief; it never replaces it. Flag evidence gaps rather than silently dropping requested points.`);
+  if (input.originalBrief) parts.push(`Original owner brief (deliverable instructions; claims are not evidence): ${JSON.stringify(input.originalBrief)}\nApply shared instructions and instructions explicitly addressed to the current destination (${input.outputFormat || "html"}); do not force requirements for another destination into this output. Preserve every applicable requested point, explicit heading, section placement and sequence. The selected angle refines this brief; it never replaces it. Flag evidence gaps rather than silently dropping requested points.`);
   const inc = input.includeIdeas?.trim();
   const exc = input.excludeIdeas?.trim();
   if (inc) {

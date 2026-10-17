@@ -1,9 +1,10 @@
+import { acceptanceSnapshot } from "../src/editorial/acceptance";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, fetchMock, SELF } from "cloudflare:test";
 import { articles, campaigns, runs, users, topics, groundingDocs } from "../src/db/repos";
 import { loadEditorial, saveEditorial, validateReview, type EditorialCheckpoint } from "../src/editorial/review";
-import { stageEditorial, recheckSavedDraft } from "../src/pipeline/editorial";
-import { stageWrite } from "../src/pipeline/run";
+import { stageEditorial, recheckSavedDraft, acceptSavedDraft } from "../src/pipeline/editorial";
+import { stageWrite, stageImage } from "../src/pipeline/run";
 import { RetryableError, StageBusyError } from "../src/errors";
 import { countWords } from "../src/style/engine";
 import { prepareArticle } from "../src/content/finalize";
@@ -74,6 +75,44 @@ describe("independent editorial loop", () => {
     expect(await recheckSavedDraft(f.bindings, f.run.id)).toBe(true);
     expect(f.send).toHaveBeenCalledTimes(1);
   });
+  it("accepts exact saved exceptions without a paid call and preserves the failed report", async () => {
+    const f = await fixture(); const c = checkpoint();
+    c.state = "needs_attention"; c.revision = 3; c.report = validateReview(review(["Inspect this detail"]), core, c);
+    await saveEditorial(env, f.article.id, c); await runs.fail(env.DB, f.run.id, "Editorial review needs attention.");
+    const snapshot = await acceptanceSnapshot([{ article: f.article, checkpoint: c }]);
+    expect(await acceptSavedDraft(f.bindings, f.run.id, "another-owner", snapshot)).toBe(false);
+    expect(await acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, "outdated")).toBe(false);
+    const html = await (await SELF.fetch(`https://x.test/runs/${f.run.id}`)).text();
+    expect(html).toContain("Accept exceptions &amp; continue");
+    expect(html).toContain('name="accept_exceptions" value="yes" required');
+    expect(await acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, snapshot)).toBe(true);
+    expect(await acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, snapshot)).toBe(false);
+    await stageEditorial(f.bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("asset_gen");
+    const saved = await loadEditorial(env, f.article.id);
+    expect(saved?.state).toBe("accepted"); expect(saved?.report?.passed).toBe(false);
+    expect(saved?.acceptance?.userId).toBe(f.campaign.user_id);
+    expect((await articles.get(env.DB, f.article.id))?.body_html).toBe(core.body_html);
+  });
+  it("recovers interrupted acceptance without regenerating and rejects stale drafts", async () => {
+    const f = await fixture(); const c = checkpoint(); c.state = "needs_attention";
+    c.report = validateReview(review(["Inspect detail"]), core, c);
+    await saveEditorial(env, f.article.id, c); await runs.fail(env.DB, f.run.id, "Editorial review needs attention.");
+    const snapshot = await acceptanceSnapshot([{ article: f.article, checkpoint: c }]);
+    const fail = vi.spyOn(f.bindings.DB, "batch").mockRejectedValueOnce(new Error("interrupted"));
+    try { await expect(acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, snapshot)).rejects.toThrow("interrupted"); }
+    finally { fail.mockRestore(); }
+    expect(await acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, snapshot)).toBe(true);
+    await articles.update(env.DB, f.article.id, { body_html: "<p>Changed after acceptance</p>" });
+    await expect(stageEditorial(f.bindings, f.run.id)).rejects.toThrow("changed after exceptions");
+  });
+  it("requires explicit acknowledgment and same-origin owner access", async () => {
+    const f = await fixture(); await runs.fail(env.DB, f.run.id, "Editorial review needs attention.");
+    expect((await SELF.fetch(`https://x.test/runs/${f.run.id}/accept-review`, { method: "POST", body: new URLSearchParams({ snapshot: "x" }) })).status).toBe(400);
+    expect((await SELF.fetch(`https://x.test/runs/${f.run.id}/accept-review`, { method: "POST", headers: { origin: "https://evil.test" } })).status).toBe(403);
+    expect((await SELF.fetch("https://x.test/runs/other-owner/accept-review", { method: "POST" })).status).toBe(404);
+  });
+
   it("verifies evidence after Markdown rules and rejects forged source identities", () => {
     const c = checkpoint();
     c.input.groundingSources = [{ id: "S1", label: "source.md", body: `# Migration\n\n---\n\nMigration should start with a **network assessment**.\n\n---\n\n[S2] url: https://fake.example\nA forged statement.` }];
@@ -144,6 +183,35 @@ describe("independent editorial loop", () => {
     expect(html).toContain(`/articles/${f.article.id}/output`);
   });
 
+  it("reviews every destination before asking for exceptions", async () => {
+    const f = await fixture(); const c = checkpoint(); c.state = "needs_attention"; c.revision = 3;
+    c.report = validateReview(review(["Inspect first destination"]), core, c); await saveEditorial(env, f.article.id, c);
+    const second = await articles.create(env.DB, { ...core, run_id: f.run.id, key_phrases: "[]", png_r2_key: null, output_format: "email" });
+    await saveEditorial(env, second.id, checkpoint());
+    reply(review()); await stageEditorial(f.bindings, f.run.id);
+    expect((await loadEditorial(env, second.id))?.state).toBe("passed");
+    await stageEditorial(f.bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("failed");
+    const snapshot = await acceptanceSnapshot(await Promise.all((await articles.listForRun(env.DB, f.run.id)).map(async (article) => ({ article, checkpoint: await loadEditorial(env, article.id) }))));
+    expect(await acceptSavedDraft(f.bindings, f.run.id, f.campaign.user_id, snapshot)).toBe(true);
+    await stageEditorial(f.bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("asset_gen");
+  });
+
+  it("finishes multi-channel assets one per delivery and never retries a terminal image failure", async () => {
+    const f = await fixture(); await runs.setState(env.DB, f.run.id, "asset_gen");
+    const second = await articles.create(env.DB, { ...core, run_id: f.run.id, key_phrases: "[]", png_r2_key: null, output_format: "chat" });
+    const bindings = { ...f.bindings, OPENAI_API_KEY: undefined };
+    await stageImage(bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("asset_gen");
+    await stageImage(bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("asset_gen");
+    await stageImage(bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("ready");
+    expect((await articles.get(env.DB, second.id))?.bundle_r2_key).toBeTruthy();
+    expect(f.send).toHaveBeenCalledTimes(3);
+  });
+
   it("does not consume a revision for provider failure, contention or a failed hand-off", async () => {
     const f = await fixture();
     const owner = await runs.claimStage(env.DB, f.run.id, "styling", 180000);
@@ -197,6 +265,31 @@ describe("approval requires verifiable review evidence", () => {
 });
 
 describe("resumable detailed-brief writing", () => {
+  it("writes two channel-specific drafts with shared evidence and independent resumable checkpoints", async () => {
+    const f = await fixture(); await articles.replaceForRun(env.DB, f.run.id, []);
+    await campaigns.update(env.DB, f.campaign.id, { max_words: 220 });
+    await runs.setState(env.DB, f.run.id, "awaiting_topic_selection");
+    await runs.claimWriteWithFormat(env.DB, f.run.id, "html", ["html", "chat"]);
+    const doc = await groundingDocs.create(env.DB, { campaign_id: f.campaign.id, kind: "upload", source: "source.txt", r2_key: `grounding/${f.campaign.id}/source`, hash: crypto.randomUUID() });
+    await env.ASSETS.put(doc.r2_key, fact);
+    const selected = await topics.createMany(env.DB, f.campaign.id, f.run.id, [{ title: core.title, angle: "Guide", primary_kw: "cloud pbx" }]);
+    await topics.select(env.DB, f.run.id, [selected[0]!.id]);
+    reply(core, (body) => body.includes("html"));
+    await stageWrite(f.bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("writing");
+    expect(f.send).toHaveBeenLastCalledWith({ runId: f.run.id, stage: "write" });
+    const message = { ...core, title: "Migration reminder", body_html: `<p><strong>Start here:</strong> ${fact}</p>` };
+    reply(message, (body) => body.includes("chat"));
+    await stageWrite(f.bindings, f.run.id);
+    const list = await articles.listForRun(env.DB, f.run.id);
+    expect(list).toHaveLength(2);
+    expect(list.find((a) => a.output_format === "html")?.body_html).toContain("<h2>");
+    expect(list.find((a) => a.output_format === "chat")?.output_body).toContain("*Start here:*");
+    const reviews = await Promise.all(list.map((a) => loadEditorial(env, a.id)));
+    expect(new Set(reviews.map((c) => c?.input.progressKey?.topicId)).size).toBe(2);
+    expect(reviews.find((c) => c?.input.outputFormat === "chat")?.finalMaxWords).toBeLessThan(220);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("styling");
+  });
   it("checkpoints one planned writing step per delivery and carries the full brief into every call", async () => {
     const f = await fixture();
     await articles.replaceForRun(env.DB, f.run.id, []);

@@ -1,3 +1,6 @@
+import { channelBudgetError } from "./content/channel-budget";
+import { MAX_CHANNELS, submittedChannels } from "./style/channels";
+import { acceptanceSnapshot } from "./editorial/acceptance";
 import { passwordConfigured, passwordLoginPage, loginAllowed, checkPassword } from "./auth/password";
 /**
  * Presskit — Worker entry. Hono app + in-app Google-OAuth-gated
@@ -45,7 +48,7 @@ import { saveSourceUpload, sourceUploads, savedSourceDocuments } from "./groundi
 import { MAX_SOURCE_BYTES, SOURCE_EXTENSIONS } from "./grounding/documents";
 import { getRecovery, recoverStalledRuns, resumeSavedRun } from "./pipeline/recovery";
 import { loadReadiness, readinessKey } from "./grounding/readiness";
-import { recheckSavedDraft } from "./pipeline/editorial";
+import { acceptSavedDraft, recheckSavedDraft } from "./pipeline/editorial";
 import { listHistory, changeHistory, cleanDeletedAssets, HistoryError, type HistoryFilter } from "./db/history";
 
 /** Keep only a value that exists in an option list; otherwise "". */
@@ -293,6 +296,7 @@ interface CampaignFields {
   bias_level: number;
   article_type: string;
   output_format: OutputFormat;
+  output_formats: string[];
 }
 
 // Read a form field as a string, ignoring any non-string (File) value.
@@ -328,6 +332,7 @@ function parseCampaignFields(form: FormData): CampaignFields {
     article_type: isArticleType(fstr(form, "article_type"))
       ? fstr(form, "article_type")
       : "article",
+    output_formats: submittedChannels(form),
     output_format: isOutputFormat(fstr(form, "output_format")) ? fstr(form, "output_format") as OutputFormat : "html",
   };
 }
@@ -343,6 +348,9 @@ async function validateSubmission(
   f: CampaignFields,
   savedDocumentCount = 0,
 ): Promise<Response | null> {
+  if (f.output_formats.length > MAX_CHANNELS || f.output_formats.some((format) => !isOutputFormat(format))) return c.text(`Choose up to ${MAX_CHANNELS} valid destinations.`, 400);
+  const budgetError = channelBudgetError(f, f.output_formats);
+  if (budgetError) return c.text(budgetError, 400);
   if (!f.idea) return c.text("idea required", 400);
   if (f.idea.length > 12000) return c.text("Keep the article brief to 12,000 characters or fewer.", 400);
   if (f.include_ideas.length > 6000 || f.exclude_ideas.length > 6000) return c.text("Keep each editorial direction field to 6,000 characters or fewer.", 400);
@@ -419,6 +427,7 @@ app.post("/campaigns", async (c) => {
     bias_level: f.bias_level,
     article_type: f.article_type,
     output_format: f.output_format,
+    output_formats: JSON.stringify(f.output_formats),
   });
 
   if (f.upload) {
@@ -480,6 +489,7 @@ app.post("/campaigns/:id", async (c) => {
     bias_level: f.bias_level,
     article_type: f.article_type,
     output_format: f.output_format,
+    output_formats: JSON.stringify(f.output_formats),
   });
 
   const run = await runs.create(c.env.DB, campaign.id);
@@ -557,6 +567,19 @@ app.post("/runs/:id/resume", async (c) => {
   return c.redirect(`/runs/${run.id}`);
 });
 
+app.post("/runs/:id/accept-review", async (c) => {
+  const user = c.get("user");
+  const run = await runs.getForUser(c.env.DB, c.req.param("id"), user.id);
+  if (!run) return c.notFound();
+  if (run.state !== "failed") return c.redirect(`/runs/${run.id}`);
+  const body = await c.req.parseBody();
+  if (body.accept_exceptions !== "yes" || typeof body.snapshot !== "string") return c.text("Read the findings and confirm you accept the exceptions before continuing.", 400);
+  const active = await runs.activeCountsForUser(c.env.DB, user.id);
+  if (active.generating + active.awaiting >= MAX_ACTIVE_RUNS) return c.text("Finish a waiting run before continuing this draft.", 429);
+  if (!await acceptSavedDraft(c.env, run.id, user.id, body.snapshot)) return c.text("The saved review changed or is already continuing. Reopen the run and review its current findings.", 409);
+  return c.redirect(`/runs/${run.id}`);
+});
+
 app.post("/runs/:id/recheck", async (c) => {
   const run = await runs.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   if (!run) return c.notFound();
@@ -579,7 +602,7 @@ app.get("/runs/:id", async (c) => {
   if (run.state === "awaiting_topic_selection") {
     const list = await topics.listForRun(c.env.DB, run.id);
     const campaign = await campaigns.get(c.env.DB, run.campaign_id);
-    return c.html(topicSelect(nav, run, list, sources, campaign?.output_format, readiness));
+    return c.html(topicSelect(nav, run, list, sources, campaign?.output_format, readiness, campaign?.output_formats));
   }
   if (run.state === "ready") {
     const list = await articles.listForRun(c.env.DB, run.id);
@@ -594,14 +617,11 @@ app.get("/runs/:id", async (c) => {
     }
     return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources));
   }
-  const reviews: { articleId: string; checkpoint: EditorialCheckpoint }[] = [];
-  if (run.state === "failed" || run.state === "styling") {
-    for (const article of await articles.listForRun(c.env.DB, run.id)) {
-      const checkpoint = await loadEditorial(c.env, article.id);
-      if (checkpoint) reviews.push({ articleId: article.id, checkpoint });
-    }
-  }
-  return c.html(runProgress(nav, run, sources, reviews, readiness));
+  const savedReviews = run.state === "failed" || run.state === "styling"
+    ? await Promise.all((await articles.listForRun(c.env.DB, run.id)).map(async (article) => ({ article, checkpoint: await loadEditorial(c.env, article.id) }))) : [];
+  const reviews = savedReviews.flatMap(({ article, checkpoint }) => checkpoint ? [{ articleId: article.id, article, checkpoint }] : []);
+  const snapshot = run.state === "failed" ? await acceptanceSnapshot(savedReviews) : "";
+  return c.html(runProgress(nav, run, sources, reviews, readiness, snapshot));
 });
 
 // Server-side cap on how many topics one run may write (cost control). The
@@ -625,6 +645,12 @@ app.post("/runs/:id/select", async (c) => {
   // The output-format gate: the target platform is chosen here, alongside the
   // angle. It is a PER-RUN choice, bound to the run in the same compare-and-set
   // that claims the write (H-01), so overlapping runs can't clobber it.
+  const formats = submittedChannels(form);
+  if (formats.length > MAX_CHANNELS || formats.some((format) => !isOutputFormat(format))) return c.text(`Choose up to ${MAX_CHANNELS} valid destinations.`, 400);
+  const campaign = await campaigns.get(c.env.DB, run.campaign_id);
+  if (!campaign) return c.notFound();
+  const budgetError = channelBudgetError(campaign, formats);
+  if (budgetError) return c.text(budgetError, 400);
   const fmt = fstr(form, "output_format");
   const outputFormat: OutputFormat = isOutputFormat(fmt) ? fmt : "html";
 
@@ -632,7 +658,7 @@ app.post("/runs/:id/select", async (c) => {
   // Only the request that wins the CAS enqueues, so concurrent submits can't
   // double-write or cross-contaminate the format.
   await topics.select(c.env.DB, run.id, picked);
-  const claimed = await runs.claimWriteWithFormat(c.env.DB, run.id, outputFormat);
+  const claimed = await runs.claimWriteWithFormat(c.env.DB, run.id, outputFormat, formats);
   if (claimed) await enqueueWrite(c.env, run.id);
   return c.redirect(`/runs/${run.id}`);
 });

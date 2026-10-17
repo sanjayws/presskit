@@ -3,8 +3,9 @@
 A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build website articles, LinkedIn posts, email EDMs and WhatsApp/chat copy from briefs, web pages and uploaded documents. Export the results; Presskit never publishes them to external channels.
 
 - Checks whether sources support the brief before writing.
-- Plans, writes, independently reviews and revises drafts with bounded retries.
+- Plans, writes, independently reviews and revises drafts with bounded retries. If review still flags issues, inspect the saved draft and accept the exceptions to continue without additional writing/review calls, or request a paid recheck. Acceptance is tied to the exact saved content, recorded separately from automated approval, and leaves findings visible. Remaining image generation can still incur charges.
 - Runs in background queues with saved checkpoints and recovery.
+- Select up to four destinations per run, such as WordPress + WhatsApp. Research is shared; each channel gets separate writing checkpoints, a draft, review, channel-sized visual and exports. Additional channels cost additional AI usage. Add channel-specific instructions to the brief; confirm destinations when choosing the angle. Existing single-channel runs remain supported.
 - Generates channel-sized images and keeps previous versions. Planning and rendering prompts reserve crop-safe background: 20% at the top/bottom for landscape images, 30% for square images, and 10% at either side. Important subjects and text stay in the central area; verify the actual destination preview because image-model adherence and platform crops vary.
 - Organises history into groups and archives; supports selective deletion.
 - Supports **administrator-created email/password accounts in D1**, Google sign-in, or both.
@@ -64,7 +65,7 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler d1 migrations apply blog_studio --remote
 ```
 
-If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql`. Never insert plaintext passwords into D1 or configuration files.
+If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql` and `0020_multiple_channels.sql`. When upgrading an existing installation, apply migrations before deploying the new Worker. Never insert plaintext passwords into D1 or configuration files.
 
 ### 5. Create a login
 
@@ -109,7 +110,7 @@ The deploy output shows your URL. If it differs from `APP_BASE_URL`, correct the
 1. Open `https://YOUR-APP-HOST/healthz`; expect `{"ok":true}`.
 2. Open `/auth/login` and sign in with your provisioned account or Google.
 3. Create a short brief with a readable supporting text file (40–60,000 characters).
-4. Confirm readiness, choose an angle, and wait for review and image generation. Leave and reopen the run to verify background progress.
+4. Confirm readiness, choose an angle and up to four destinations, and wait for review and image generation. Leave and reopen the run to verify background progress.
 5. Check source downloads, image history and export. If a provider fails, use the specific run diagnostic; check model access, billing and secrets before retrying.
 
 ### 8. Optional ready emails

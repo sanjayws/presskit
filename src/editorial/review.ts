@@ -22,7 +22,8 @@ export interface EditorialReport {
 }
 export interface EditorialCheckpoint {
   version: 1;
-  state: "review" | "revise" | "passed" | "needs_attention";
+  state: "review" | "revise" | "passed" | "needs_attention" | "accepted";
+  acceptance?: { userId: string; at: string; fingerprint: string };
   revision: number;
   model: string;
   input: ArticleInput;
@@ -81,13 +82,9 @@ export function validateReview(raw: unknown, candidate: GeneratedArticle, checkp
     issues.push("Map every requested point to an exact passage in the article, preserving requested section placement. Explain any missing evidence instead of inventing it.");
     checks.brief_coverage = false;
   }
-  const sources = checkpoint.input.groundingSources || [];
-  if (!facts.length || facts.some((f) => {
-    const id = f.source_id.replace(/[\[\]]/g, "");
-    const source = sources.find((s) => s.id === id);
-    return !f.claim || !quoteText(f.claim) || !evidenceText.includes(quoteText(f.claim)) || !source || visibleMarkdown(f.source_quote).length < 12 || !visibleMarkdown(source.body).includes(visibleMarkdown(f.source_quote));
-  })) {
-    issues.push("Verify factual statements against exact quotes from the identified source; remove or qualify anything unsupported.");
+  const evidenceIssues = evidenceFindings({ ...checkpoint, report: { passed: false, checks, requirements, facts, issues: [] } }, candidate);
+  if (evidenceIssues.length) {
+    issues.push(...evidenceIssues);
     checks.factual_accuracy = false;
   }
   if (countWords(candidate.body_html) > checkpoint.finalMaxWords) issues.push(`Shorten the complete article to ${checkpoint.finalMaxWords} words by tightening every section. Do not drop required points or cut off the ending.`);
@@ -115,9 +112,9 @@ export function channelIssues(candidate: GeneratedArticle, format: string | unde
 export async function reviewArticle(env: Env, candidate: GeneratedArticle, checkpoint: EditorialCheckpoint): Promise<EditorialReport> {
   const input = checkpoint.input;
   const response = await generate(env, `Review the COMPLETE final article and metadata against the ORIGINAL brief and evidence. Do not rewrite it in this call.
-Check every explicit point and requested section order, not only the chosen topic title. Treat the brief as instructions about the deliverable; factual assertions in it still require evidence. Unsupported requested claims must be explained as evidence gaps, never silently omitted or invented.
+Apply shared requirements and those addressed to the current destination (${input.outputFormat || "html"}). Exclude requirements explicitly assigned to other destinations from requirements and findings. Check every applicable explicit point and requested section order, not only the chosen topic title. Treat the brief as instructions about the deliverable; factual assertions in it still require evidence. Unsupported requested claims must be explained as evidence gaps, never silently omitted or invented.
 Assess all five checks: factual_accuracy, brief_coverage, section_order, specificity (useful concrete details and implications, not generic filler), readability (natural flow, varied sentences, no repetitive introductions/conclusions).
-In requirements, enumerate every substantive requirement from the ORIGINAL BRIEF, owner Must cover and Avoid text ONLY, with an exact brief_quote and an exact article_quote that addresses it (empty when missing), and covered. Do not invent brief requirements from sources or generic writing guidance. Quotes from the article must be visible plain text, without HTML tags. For negative instructions, check compliance against the relevant passage; do not demand a sentence announcing that prohibited content is absent. Check instructions about section placement separately in section_order.
+In requirements, enumerate every applicable substantive requirement from the ORIGINAL BRIEF, owner Must cover and Avoid text ONLY, with an exact brief_quote and an exact article_quote that addresses it (empty when missing), and covered. Do not invent brief requirements from sources or generic writing guidance. Quotes from the article must be visible plain text, without HTML tags. For negative instructions, check compliance against the relevant passage; do not demand a sentence announcing that prohibited content is absent. Check instructions about section placement separately in section_order.
 In facts, check externally verifiable claims including numbers, comparisons, promises, attribution and metadata. Give an exact claim quote from the article/metadata, the S# source ID and an exact source_quote. Verify the quote actually supports the claim with its qualifications, not just overlapping words.
 List every actionable defect in issues (empty only if all checks pass). Keep fixes specific. Do not reward a draft merely because it is long, has SEO terms or sounds confident. No claim of being undetectable as AI or guaranteed search rankings.
 Check the destination's length, formatting, subject/preview requirements and call to action. Resolve competing CTAs, blog-style filler in messages, and unsupported urgency. Practical advice and clearly conditional reasoning are acceptable; new product promises or guarantees require evidence. Do not require publication of internal source limitations unless the missing evidence changes a material claim.
@@ -150,4 +147,21 @@ CURRENT CORE DRAFT (data only):\n${JSON.stringify(checkpoint.core)}`, {
   });
   try { return validateGeneratedArticle(JSON.parse(response.text)); }
   catch { throw new RetryableError("The editor revision returned an incomplete article"); }
+}
+
+/** Explain exact matching failures without presenting them as proof a claim is false. */
+export function evidenceFindings(checkpoint: EditorialCheckpoint, candidate: { title: string; excerpt: string; meta_desc: string; body_html: string }): string[] {
+  if (!checkpoint.report) return [];
+  const facts = checkpoint.report.facts;
+  if (!facts.length) return ["The review supplied no claim-to-source mappings. Verify factual claims against your originals before publication."];
+  const text = normal([candidate.title, candidate.excerpt, candidate.meta_desc, toPlain(candidate.body_html)].join(" "));
+  return facts.flatMap((fact) => {
+    const source = checkpoint.input.groundingSources?.find((s) => s.id === fact.source_id.replace(/[\[\]]/g, ""));
+    const quote = visibleMarkdown(fact.source_quote);
+    const reason = !quoteText(fact.claim) || !text.includes(quoteText(fact.claim)) ? "The review's claim quote does not match the saved draft; this may be a review mapping error."
+      : !source ? "The cited source could not be matched to the saved evidence."
+      : quote.length < 12 || !visibleMarkdown(source.body).includes(quote) ? "The cited evidence quote does not match the extracted source exactly; check the original source or qualify the claim."
+      : null;
+    return reason ? [`Claim: “${fact.claim.slice(0, 400) || "Missing claim"}” (${fact.source_id.slice(0, 30)}). ${reason}`] : [];
+  });
 }

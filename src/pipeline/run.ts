@@ -1,3 +1,4 @@
+import { selectedChannels } from "../style/channels";
 /**
  * Run orchestration. One function per pipeline stage. Each stage advances run
  * state and enqueues the next stage. Any throw is caught by the queue consumer,
@@ -28,11 +29,9 @@ import {
   countWords,
   PERSONAS,
   TONES,
-  isOutputFormat,
   formatWriterGuidance,
   channelProfile,
   isCampaignChannel,
-  type OutputFormat,
 } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { renderFeaturedVisual } from "../images/render";
@@ -145,7 +144,7 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
       runId,
       campaign.idea,
       grounding,
-      `${articleTypeByValue(campaign.article_type).research}\nDestination: ${campaign.output_format}. ${channelProfile(campaign.output_format).summary}. For email and chat propose one focused message that fits the channel; for LinkedIn propose one professional insight. Channel suitability takes priority over SEO framing.`,
+      `${articleTypeByValue(campaign.article_type).research}\nDestinations: ${selectedChannels(campaign.output_format, campaign.output_formats).map((format) => `${format}: ${channelProfile(format).summary}`).join("; ")}. For email and chat propose one focused message that fits the channel; for LinkedIn propose one professional insight. Channel suitability takes priority over SEO framing.`,
     );
 
     // Human picks next; no auto-advance past selection.
@@ -193,11 +192,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
     // run (H-01). It shapes how social posts are WRITTEN (short, no tables) and
     // how every article's body is RENDERED (html/word stay rich; markdown/plain/
     // social serialize the HTML).
-    const outputFormat: OutputFormat = isOutputFormat(run.output_format)
-      ? run.output_format
-      : "html";
-    const effWords = Math.min(campaign.max_words, channelProfile(outputFormat).maxWords);
-    const formatGuidance = formatWriterGuidance(outputFormat);
+    const formats = selectedChannels(run.output_format, run.output_formats);
 
     // The user's prior articles, for near-duplicate flagging (not blocking).
     const priors: PriorArticle[] = (
@@ -208,7 +203,10 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
     // retry never deletes completed articles before replacements are ready.
     const built: ArticleInsert[] = [];
     const checkpoints: EditorialCheckpoint[] = [];
-    for (const topic of selected) {
+    for (const outputFormat of formats) for (const topic of selected) {
+      const effWords = Math.min(campaign.max_words, channelProfile(outputFormat).maxWords);
+      const formatGuidance = formatWriterGuidance(outputFormat);
+      const progressId = formats.length > 1 ? `${topic.id}:${outputFormat}` : topic.id;
       const reserve = enrichmentReserveWords(referenceLinks, cta, isCampaignChannel(outputFormat)) + countWords(campaign.signature);
       if (effWords - reserve < (outputFormat === "chat" ? 30 : 80)) throw new Error("The links, call to action and signature leave too little space. Increase the word limit or shorten them.");
       const input = {
@@ -229,7 +227,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
         articleTypeInstruction: articleTypeByValue(campaign.article_type).writing,
         formatGuidance,
         outputFormat,
-        progressKey: { runId, topicId: topic.id },
+        progressKey: { runId, topicId: progressId },
       };
       let generated;
       try { generated = await generateArticle(env, input); }
@@ -238,6 +236,13 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
         await runs.releaseStage(env.DB, runId, owner);
         try { await enqueue(env, { runId, stage: "write" }); }
         catch { throw new RetryableError("Could not resume article writing"); }
+        return;
+      }
+      // Yield between completed channels; cached drafts never buy another writing call.
+      if (formats.length > 1 && outputFormat !== formats.at(-1) && !await articleProgress.load(env.DB, runId, `${progressId}:complete`)) {
+        await articleProgress.save(env.DB, runId, `${progressId}:complete`, "{}", "{}");
+        await runs.releaseStage(env.DB, runId, owner);
+        await enqueue(env, { runId, stage: "write" });
         return;
       }
       const checkpoint: EditorialCheckpoint = { version: 1, state: "review", revision: 0,
@@ -315,7 +320,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
     const campaign = await campaigns.get(env.DB, run.campaign_id);
     for (const article of list) {
       // Retry only incomplete assets; queue replays do not buy another image.
-      if (article.png_r2_key) continue;
+      if (article.png_r2_key || (await imageJobs.get(env.DB, article.id))?.state === "failed") continue;
       const pngKey = `articles/${article.id}/featured.png`;
       try {
         const key = await renderFeaturedVisual(env, article, campaign, {
@@ -327,9 +332,14 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
         // Provider messages are sanitised by the clients; no prompts or source
         // content are logged. Permanent/final failures preserve the article.
         console.error(`image generation failed for ${article.id}: ${String(e)}`);
-        await imageJobs.initialFailure(env.DB, article.id, imageFailureMessage(e)).catch(() => {
-          logEvent("image.failure_status_unavailable", { article_id: article.id });
-        });
+        // Persist the failure before yielding; otherwise a replay could buy it again.
+        await imageJobs.initialFailure(env.DB, article.id, imageFailureMessage(e));
+      }
+      // One visual per delivery, so several channels do not share a long lease.
+      if (list.length > 1) {
+        await runs.releaseStage(env.DB, runId, lease);
+        await enqueue(env, { runId, stage: "image" });
+        return;
       }
     }
 

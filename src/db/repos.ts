@@ -8,7 +8,7 @@ const CAMPAIGN_UPDATABLE = new Set([
   "idea", "grounding_refs", "voice_profile", "max_words", "image_brief",
   "persona", "tone", "temperature", "signature", "image_style",
   "reference_links", "cta", "cta_action", "cta_target",
-  "include_ideas", "exclude_ideas", "bias_level", "output_format", "article_type",
+  "include_ideas", "exclude_ideas", "bias_level", "output_format", "output_formats", "article_type",
 ]);
 const ARTICLE_UPDATABLE = new Set([
   "title", "body_html", "excerpt", "slug", "meta_desc", "key_phrases", "output_body",
@@ -65,6 +65,7 @@ export interface Campaign {
   include_ideas: string; // optional: ideas/points the article must cover
   exclude_ideas: string; // optional: things the article must not mention
   bias_level: number; // 1..5; 1 = neutral/honest, 5 = strongly promotional
+  output_formats?: string; // JSON destinations; legacy rows use output_format
   output_format: string; // 'html' | 'social' | 'plain' | 'markdown' | 'word'
   article_type: string; // 'article' | 'comparison' | 'listicle' | 'howto' | 'news' | 'blog' | 'opinion' | 'review'
   created_at: number;
@@ -88,6 +89,7 @@ export interface Run {
   lease_owner: string | null;
   lease_until: number;
   regen_count: number;
+  output_formats?: string; // JSON destinations; legacy rows use output_format
   output_format: string; // per-run output target, set at the selection gate
 }
 
@@ -182,6 +184,7 @@ export const campaigns = {
       exclude_ideas?: string;
       bias_level?: number;
       output_format?: string;
+      output_formats?: string;
       article_type?: string;
     },
   ): Promise<Campaign> {
@@ -206,13 +209,14 @@ export const campaigns = {
       exclude_ideas: input.exclude_ideas ?? "",
       bias_level: input.bias_level ?? 3,
       output_format: input.output_format ?? "html",
+      output_formats: input.output_formats ?? "[]",
       article_type: input.article_type ?? "article",
       created_at: now(),
     };
     await exec(
       db,
-      `INSERT INTO campaigns (id, user_id, idea, grounding_refs, voice_profile, max_words, image_brief, persona, tone, temperature, signature, image_style, reference_links, cta, cta_action, cta_target, include_ideas, exclude_ideas, bias_level, output_format, article_type, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO campaigns (id, user_id, idea, grounding_refs, voice_profile, max_words, image_brief, persona, tone, temperature, signature, image_style, reference_links, cta, cta_action, cta_target, include_ideas, exclude_ideas, bias_level, output_format, output_formats, article_type, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       c.id,
       c.user_id,
       c.idea,
@@ -233,6 +237,7 @@ export const campaigns = {
       c.exclude_ideas,
       c.bias_level,
       c.output_format,
+      c.output_formats!,
       c.article_type,
       c.created_at,
     );
@@ -391,12 +396,14 @@ export const runs = {
     db: D1Database,
     id: string,
     outputFormat: string,
+    outputFormats: string[] = [outputFormat],
   ): Promise<boolean> {
     const changed = await execChanges(
       db,
-      `UPDATE runs SET state = 'writing', error = NULL, output_format = ?
+      `UPDATE runs SET state = 'writing', error = NULL, output_format = ?, output_formats = ?
        WHERE id = ? AND state = 'awaiting_topic_selection'`,
       outputFormat,
+      JSON.stringify(outputFormats),
       id,
     );
     return changed > 0;

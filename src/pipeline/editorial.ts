@@ -1,4 +1,5 @@
 /** One editor/revision call per queue message; a checkpoint precedes every hand-off. */
+import { acceptanceSnapshot, reviewFingerprint } from "../editorial/acceptance";
 import type { Env } from "../env";
 import { articles, campaigns, runs } from "../db/repos";
 import { loadEditorial, MAX_REVISIONS, reviewArticle, reviseArticle, saveEditorial } from "../editorial/review";
@@ -9,6 +10,25 @@ import { RetryableError, StageBusyError } from "../errors";
 import { logEvent } from "../log";
 import { scheduleStage, getRecovery, restartStage } from "./recovery";
 import { groundingEvidenceForRun } from "../grounding/report";
+
+/** No provider calls: preserve findings and durably resume only after explicit acceptance. */
+export async function acceptSavedDraft(env: Env, runId: string, userId: string, snapshot: string): Promise<boolean> {
+  if (!snapshot || !(await runs.getForUser(env.DB, runId, userId))) return false;
+  const owner = await runs.claimStage(env.DB, runId, "failed", 60000);
+  if (!owner) return false;
+  try {
+    const list = await articles.listForRun(env.DB, runId);
+    const saved = await Promise.all(list.map(async (article) => ({ article, checkpoint: await loadEditorial(env, article.id) })));
+    if (await acceptanceSnapshot(saved) !== snapshot) return false;
+    for (const { article, checkpoint } of saved) {
+      if (!checkpoint || checkpoint.state === "passed") continue;
+      checkpoint.acceptance = { userId, at: new Date().toISOString(), fingerprint: await reviewFingerprint(article, checkpoint) };
+      checkpoint.state = "accepted";
+      await saveEditorial(env, article.id, checkpoint);
+    }
+    return await restartStage(env, runId, "failed", "review", owner);
+  } finally { await runs.releaseStage(env.DB, runId, owner); }
+}
 
 /** User-requested recheck preserves the draft and starts a fresh bounded review. */
 export async function recheckSavedDraft(env: Env, runId: string): Promise<boolean> {
@@ -46,11 +66,14 @@ export async function stageEditorial(env: Env, runId: string): Promise<void> {
     for (const article of list) {
       const checkpoint = await loadEditorial(env, article.id);
       if (!checkpoint) throw new Error("The editorial checkpoint is missing. Reopen the brief to start a new run.");
-      if (checkpoint.state === "needs_attention") {
-        await runs.fail(env.DB, runId, "Editorial review needs attention. Review the findings and update the brief or sources.");
-        return;
-      }
+      if (checkpoint.state === "needs_attention") continue;
       if (checkpoint.state === "passed") continue;
+      if (checkpoint.state === "accepted") {
+        if (!checkpoint.acceptance || checkpoint.acceptance.fingerprint !== await reviewFingerprint(article, checkpoint)) {
+          throw new Error("The saved draft changed after exceptions were accepted. Reopen the draft for review.");
+        }
+        continue;
+      }
       if (!checkpoint.input.groundingSources) {
         const campaign = await campaigns.get(env.DB, run.campaign_id);
         if (!campaign) throw new Error("The campaign for this saved draft is missing");
@@ -77,7 +100,7 @@ export async function stageEditorial(env: Env, runId: string): Promise<void> {
       }
       // New messages have their own infrastructure retry budget; successful
       // editorial revisions are bounded by the persisted revision counter.
-      if (checkpoint.state === "needs_attention") {
+      if (checkpoint.state === "needs_attention" && list.length === 1) {
         await runs.fail(env.DB, runId, "Editorial review needs attention. Review the findings and update the brief or sources.");
       } else {
         await runs.releaseStage(env.DB, runId, owner);
@@ -85,6 +108,12 @@ export async function stageEditorial(env: Env, runId: string): Promise<void> {
         catch { throw new RetryableError("Could not schedule the next editorial step"); }
       }
       return;
+    }
+    for (const article of list) {
+      if ((await loadEditorial(env, article.id))?.state === "needs_attention") {
+        await runs.fail(env.DB, runId, "Editorial review needs attention. Review the findings and accept exceptions or request a recheck.");
+        return;
+      }
     }
     if (!await runs.handOff(env.DB, runId, "styling", "asset_gen", owner)) return;
     try { await scheduleStage(env, { runId, stage: "image" }); }
