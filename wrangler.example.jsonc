@@ -1,0 +1,71 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "presskit",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "workers_dev": true,
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "browser": {
+    "binding": "BROWSER"
+  },
+  "ai": {
+    "binding": "DOCUMENTS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "blog_studio",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "PIPELINE",
+        "queue": "pipeline"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "pipeline",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "pipeline-dlq"
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "blog-studio-assets"
+    }
+  ],
+  "vars": {
+    "ALLOWED_EMAIL_DOMAIN": "example.com",
+    "ANTHROPIC_MODEL": "claude-opus-5-5",
+    "ANTHROPIC_EFFORT": "low",
+    "OPENAI_DOCUMENT_MODEL": "gpt-6-luna",
+    "OPENAI_IMAGE_MODEL": "gpt-image-2.5-sunburst",
+    "OPENAI_IMAGE_QUALITY": "medium",
+    "READY_EMAIL_ENABLED": "false",
+    "GOOGLE_CLIENT_ID": "",
+    "APP_BASE_URL": "https://presskit.YOUR-SUBDOMAIN.workers.dev",
+    "PASSWORD_LOGIN_ENABLED": "true"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/coreyhaines31/marketingskills",
+  "commit": "dda3841f0b294e01e93b1541486beefbfab0915e",
+  "reviewedAt": "2026-10-03",
+  "license": "MIT",
+  "runtimeAdapterVersion": "2026-10-15.1",
+  "skills": [
+    { "id": "content-strategy", "version": "2.1.2", "sha256": "220deb6d747c94a32bb478abdfa8fcce8eae3e8ee0e93881a5902b5cc7467f77" },
+    { "id": "copywriting", "version": "2.1.0", "sha256": "78c0a09b78a41995ba055d6549bbd7db3fe958673d039b9121e7a2e32bb4bb06" },
+    { "id": "copy-editing", "version": "2.1.0", "sha256": "1c86fafd6667132bef4902578aee741fc6adc97953c0d9830b29e2e1ef52f8e3" },
+    { "id": "ai-seo", "version": "2.7.2", "sha256": "a4a7d43a0285d1b518d175fe2445b886ba1ced66a42cd6c8ffe729b5b124417f" },
+    { "id": "social", "version": "2.3.2", "sha256": "b31a0720aa36acd746c7486036d59bb9fbec9a1a9f56b4e68830a8072b3737f9" },
+    { "id": "image", "version": "2.0.2", "sha256": "a03da6dd4aed940f2fb8df1337a8dbe0f4108b3bef864e996f759fa4d94e2600" }
+  ]
+}

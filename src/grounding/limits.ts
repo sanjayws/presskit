@@ -1,0 +1,2 @@
+export const MAX_SOURCE_BYTES = 10_000_000;
+export const MAX_EXTRACTED_CHARS = 60_000;

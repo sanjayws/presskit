@@ -1,0 +1,3 @@
+ppt-to-text 1.0.1, https://github.com/JaredYe04/ppt-to-text, based on SheetJS/js-ppt. Apache-2.0; see LICENSE.
+Local compatibility patch: declare CFB, cptable and Buffer in module scope with literal requires so the parser works in an ES module Worker without implicit globals.
+Only buffer input and text output are exposed by src/grounding/documents.ts. No filesystem paths, macros, output paths or embedded links are accepted.
