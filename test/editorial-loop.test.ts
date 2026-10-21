@@ -1,3 +1,4 @@
+import { readinessKey } from "../src/grounding/readiness";
 import { acceptanceSnapshot } from "../src/editorial/acceptance";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, fetchMock, SELF } from "cloudflare:test";
@@ -43,6 +44,14 @@ beforeEach(() => { fetchMock.activate(); fetchMock.disableNetConnect(); });
 afterEach(() => { try { fetchMock.assertNoPendingInterceptors(); } finally { fetchMock.deactivate(); } });
 
 describe("independent editorial loop", () => {
+  it("reviews the supported draft without demanding waived specifics or missing-source commentary", async () => {
+    const f = await fixture(); const c = checkpoint();
+    c.input.acceptedEvidenceGaps = [{ requirement: "State a precise launch date", missing: "No confirmed date" }];
+    await saveEditorial(env, f.article.id, c);
+    reply(review(), (body) => body.includes("waived unsupported specifics") && body.includes("Do not mention missing sources"));
+    await stageEditorial(f.bindings, f.run.id);
+    expect((await loadEditorial(env, f.article.id))?.state).toBe("passed");
+  });
   it("accepts fulfilled Avoid requirements instead of falsely revising a supported draft", () => {
     const c = checkpoint(); c.input.excludeIdeas = "Do not discuss the vendor itself.";
     const raw = review();
@@ -274,12 +283,15 @@ describe("resumable detailed-brief writing", () => {
     await env.ASSETS.put(doc.r2_key, fact);
     const selected = await topics.createMany(env.DB, f.campaign.id, f.run.id, [{ title: core.title, angle: "Guide", primary_kw: "cloud pbx" }]);
     await topics.select(env.DB, f.run.id, [selected[0]!.id]);
-    reply(core, (body) => body.includes("html"));
+    await env.ASSETS.put(readinessKey(f.run.id), JSON.stringify({ version: 1, state: "needs_input", fingerprint: "a".repeat(64), summary: "Date not verified", checkedAt: Date.now(),
+      gaps: [{ requirement: "State the launch date", missing: "No confirmed date", action: "Use supported material" }],
+      acceptance: { userId: f.campaign.user_id, at: new Date().toISOString(), token: "b".repeat(64) } }));
+    reply(core, (body) => body.includes("html") && body.includes("Do not mention missing sources"));
     await stageWrite(f.bindings, f.run.id);
     expect((await runs.get(env.DB, f.run.id))?.state).toBe("writing");
     expect(f.send).toHaveBeenLastCalledWith({ runId: f.run.id, stage: "write" });
     const message = { ...core, title: "Migration reminder", body_html: `<p><strong>Start here:</strong> ${fact}</p>` };
-    reply(message, (body) => body.includes("chat"));
+    reply(message, (body) => body.includes("chat") && body.includes("Do not mention missing sources"));
     await stageWrite(f.bindings, f.run.id);
     const list = await articles.listForRun(env.DB, f.run.id);
     expect(list).toHaveLength(2);

@@ -1,3 +1,4 @@
+import { acceptedGapsGuidance, type AcceptedGap } from "../editorial/accepted-gaps";
 /**
  * Agentic article generation. Instead of one giant call, the writer works like
  * a human: it PLANS first (title, metadata, and a section-by-section outline),
@@ -95,6 +96,7 @@ const SECTION_SYSTEM = `You are an expert article writer completing ONE section 
 export interface ArticleInput {
   /** The full owner brief must survive angle selection and every writing call. */
   originalBrief?: string;
+  acceptedEvidenceGaps?: AcceptedGap[];
   topicTitle: string;
   angle: string;
   primaryKw: string;
@@ -144,7 +146,8 @@ export function biasInstruction(level: number): string {
 /** Owner editorial directives: what to include, what to exclude, and the bias stance. */
 export function editorialBlock(input: ArticleInput): string {
   const parts: string[] = [];
-  if (input.originalBrief) parts.push(`Original owner brief (deliverable instructions; claims are not evidence): ${JSON.stringify(input.originalBrief)}\nApply shared instructions and instructions explicitly addressed to the current destination (${input.outputFormat || "html"}); do not force requirements for another destination into this output. Preserve every applicable requested point, explicit heading, section placement and sequence. The selected angle refines this brief; it never replaces it. Flag evidence gaps rather than silently dropping requested points.`);
+  if (input.acceptedEvidenceGaps?.length) parts.push(acceptedGapsGuidance(input.acceptedEvidenceGaps));
+  if (input.originalBrief) parts.push(`Original owner brief (deliverable instructions; claims are not evidence): ${JSON.stringify(input.originalBrief)}\nApply shared instructions and instructions explicitly addressed to the current destination (${input.outputFormat || "html"}); do not force requirements for another destination into this output. Preserve every applicable requested point, explicit heading, section placement and sequence. The selected angle refines this brief; it never replaces it. For gaps the owner has explicitly accepted, adapt or omit unsupported specifics naturally without process commentary. Flag other evidence gaps in editorial review rather than inventing facts.`);
   const inc = input.includeIdeas?.trim();
   const exc = input.excludeIdeas?.trim();
   if (inc) {

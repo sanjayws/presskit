@@ -1,3 +1,5 @@
+import { acceptReadiness, readinessAcceptanceToken } from "../src/grounding/acceptance";
+import { readinessSummary, resultScreen } from "../src/ui/pages";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, fetchMock, SELF, createMessageBatch } from "cloudflare:test";
 import { users, campaigns, runs, articles } from "../src/db/repos";
@@ -38,6 +40,62 @@ beforeEach(() => { fetchMock.activate(); fetchMock.disableNetConnect(); });
 afterEach(() => { try { fetchMock.assertNoPendingInterceptors(); } finally { fetchMock.deactivate(); } });
 
 describe("readiness before writing", () => {
+  async function paused(withSource = true) {
+    const f = await fixture(withSource);
+    const report = { version: 1 as const, state: "needs_input" as const, fingerprint: "a".repeat(64), checkedAt: Date.now(),
+      summary: "One detail needs evidence.", gaps: [{ requirement: "Include measured results", missing: "Results are absent", action: "Add the report or qualify the claim" }] };
+    await env.ASSETS.put(readinessKey(f.run.id), JSON.stringify(report));
+    await runs.setState(env.DB, f.run.id, "needs_input");
+    const currentCampaign = (await campaigns.get(env.DB, f.campaign.id))!;
+    return { ...f, campaign: currentCampaign, report, token: await readinessAcceptanceToken(report, currentCampaign) };
+  }
+  it("continues an existing incomplete gate with no new model calls and retains warnings", async () => {
+    const f = await paused();
+    expect(await acceptReadiness(f.bindings, f.run.id, f.user.id, f.token)).toBe(true);
+    expect(await acceptReadiness(f.bindings, f.run.id, f.user.id, f.token)).toBe(false);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledWith({ runId: f.run.id, stage: "topics" });
+    const saved = await loadReadiness(env, f.run.id);
+    expect(saved?.state).toBe("needs_input"); expect(saved?.gaps).toEqual(f.report.gaps);
+    expect(saved?.acceptance?.userId).toBe(f.user.id);
+    await stageAssess(f.bindings, f.run.id); // stale delivery must not buy another check
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(readinessSummary(saved)).toContain("Evidence gaps accepted by you");
+    expect(resultScreen({ email: f.user.email, history: [], nonce: "test" }, f.run, [], [], {}, {}, [], saved)).toContain("Results are absent");
+  });
+  it("rejects wrong owners, stale findings, changed briefs and unreadable sources", async () => {
+    const f = await paused();
+    expect(await acceptReadiness(f.bindings, f.run.id, "other", f.token)).toBe(false);
+    expect(await acceptReadiness(f.bindings, f.run.id, f.user.id, "stale")).toBe(false);
+    await campaigns.update(env.DB, f.campaign.id, { idea: "A changed brief" });
+    expect(await acceptReadiness(f.bindings, f.run.id, f.user.id, f.token)).toBe(false);
+    const empty = await paused(false);
+    expect(await acceptReadiness(empty.bindings, empty.run.id, empty.user.id, empty.token)).toBe(false);
+    expect(f.send).not.toHaveBeenCalled(); expect(empty.send).not.toHaveBeenCalled();
+  });
+  it("recovers an interrupted acceptance and a failed queue send without repeated AI spend", async () => {
+    const f = await paused();
+    const fail = vi.spyOn(f.bindings.DB, "batch").mockRejectedValueOnce(new Error("interrupted"));
+    try { await expect(acceptReadiness(f.bindings, f.run.id, f.user.id, f.token)).rejects.toThrow("interrupted"); }
+    finally { fail.mockRestore(); }
+    expect((await loadReadiness(env, f.run.id))?.acceptance).toBeTruthy();
+    f.send.mockRejectedValueOnce(new Error("queue unavailable"));
+    expect(await acceptReadiness(f.bindings, f.run.id, f.user.id, f.token)).toBe(true);
+    expect((await getRecovery(env, f.run.id))?.stage).toBe("topics");
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("drafting_topics");
+  });
+  it("shows an unchecked confirmation on existing gates and enforces owner and origin guards", async () => {
+    const f = await paused(); const dev = await users.upsertByEmail(env.DB, "dev@example.com");
+    await env.DB.prepare("UPDATE campaigns SET user_id=? WHERE id=?").bind(dev.id, f.campaign.id).run();
+    const html = await (await SELF.fetch(`https://x.test/runs/${f.run.id}`)).text();
+    expect(html).toContain("Ignore and continue");
+    expect(html).toContain('name="accept_gaps" value="yes" required');
+    expect((await SELF.fetch(`https://x.test/runs/${f.run.id}/accept-readiness`, { method: "POST", body: new URLSearchParams({ snapshot: f.token }) })).status).toBe(400);
+    expect((await SELF.fetch(`https://x.test/runs/${f.run.id}/accept-readiness`, { method: "POST", headers: { origin: "https://evil.test" } })).status).toBe(403);
+    const other = await paused();
+    expect((await SELF.fetch(`https://x.test/runs/${other.run.id}/accept-readiness`, { method: "POST" })).status).toBe(404);
+  });
+
   it("hands ingestion to assessment instead of topic generation", async () => {
     const f = await fixture();
     await stageIngest(f.bindings, f.run.id);

@@ -13,6 +13,7 @@ export interface ReadinessReport {
   summary: string;
   gaps: ReadinessGap[];
   checkedAt: number;
+  acceptance?: { userId: string; at: string; token: string };
 }
 export const readinessKey = (runId: string) => `runs/${runId}/readiness.json`;
 export async function loadReadiness(env: Env, runId: string): Promise<ReadinessReport | null> {
@@ -26,6 +27,9 @@ export async function loadReadiness(env: Env, runId: string): Promise<ReadinessR
     || !bounded(value.summary) || !Number.isFinite(value.checkedAt) || !Array.isArray(value.gaps)
     || value.gaps.length > 6 || (value.state === "needs_input" ? !value.gaps.length : value.gaps.length !== 0)
     || value.gaps.some((gap) => !gap || !bounded(gap.requirement) || !bounded(gap.missing) || !bounded(gap.action))) return null;
+  if (value.acceptance && (value.state !== "needs_input" || typeof value.acceptance.userId !== "string"
+    || typeof value.acceptance.at !== "string" || !Number.isFinite(Date.parse(value.acceptance.at))
+    || typeof value.acceptance.token !== "string" || !/^[a-f0-9]{64}$/.test(value.acceptance.token))) return null;
   return value;
 }
 

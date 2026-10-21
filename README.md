@@ -2,7 +2,7 @@
 
 A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build website articles, LinkedIn posts, email EDMs and WhatsApp/chat copy from briefs, web pages and uploaded documents. Export the results; Presskit never publishes them to external channels.
 
-- Checks whether sources support the brief before writing.
+- Checks whether sources support the brief before writing. When readable sources exist but evidence gaps remain, acknowledge the findings and choose **Ignore and continue** to move to angle selection without another readiness call. The original findings remain visible through export; the writer adapts around supported material and omits unsupported specifics without missing-source/process commentary in the publishable copy, and final editorial review still applies. Runs with no readable source require an upload or successful source retry.
 - Plans, writes, independently reviews and revises drafts with bounded retries. If review still flags issues, inspect the saved draft and accept the exceptions to continue without additional writing/review calls, or request a paid recheck. Acceptance is tied to the exact saved content, recorded separately from automated approval, and leaves findings visible. Remaining image generation can still incur charges.
 - Runs in background queues with saved checkpoints and recovery.
 - Select up to four destinations per run, such as WordPress + WhatsApp. Research is shared; each channel gets separate writing checkpoints, a draft, review, channel-sized visual and exports. Additional channels cost additional AI usage. Add channel-specific instructions to the brief; confirm destinations when choosing the angle. Existing single-channel runs remain supported.

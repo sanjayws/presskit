@@ -1,3 +1,4 @@
+import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
 import { channelBudgetError } from "./content/channel-budget";
 import { MAX_CHANNELS, submittedChannels } from "./style/channels";
 import { acceptanceSnapshot } from "./editorial/acceptance";
@@ -567,6 +568,19 @@ app.post("/runs/:id/resume", async (c) => {
   return c.redirect(`/runs/${run.id}`);
 });
 
+app.post("/runs/:id/accept-readiness", async (c) => {
+  const user = c.get("user");
+  const run = await runs.getForUser(c.env.DB, c.req.param("id"), user.id);
+  if (!run) return c.notFound();
+  if (run.state !== "needs_input") return c.redirect(`/runs/${run.id}`);
+  const form = await c.req.parseBody();
+  if (form.accept_gaps !== "yes" || typeof form.snapshot !== "string") return c.text("Acknowledge the listed evidence gaps before continuing.", 400);
+  const active = await runs.activeCountsForUser(c.env.DB, user.id);
+  if (active.generating + active.awaiting >= MAX_ACTIVE_RUNS) return c.text("Finish a waiting run before continuing this brief.", 429);
+  if (!await acceptReadiness(c.env, run.id, user.id, form.snapshot)) return c.text("The brief or findings changed, no readable source is available, or this run is already continuing. Reopen the run to review its current status.", 409);
+  return c.redirect(`/runs/${run.id}`);
+});
+
 app.post("/runs/:id/accept-review", async (c) => {
   const user = c.get("user");
   const run = await runs.getForUser(c.env.DB, c.req.param("id"), user.id);
@@ -615,13 +629,16 @@ app.get("/runs/:id", async (c) => {
       const review = await loadEditorial(c.env, article.id);
       if (review) reviews[article.id] = review;
     }
-    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources));
+    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources, readiness));
   }
   const savedReviews = run.state === "failed" || run.state === "styling"
     ? await Promise.all((await articles.listForRun(c.env.DB, run.id)).map(async (article) => ({ article, checkpoint: await loadEditorial(c.env, article.id) }))) : [];
   const reviews = savedReviews.flatMap(({ article, checkpoint }) => checkpoint ? [{ articleId: article.id, article, checkpoint }] : []);
   const snapshot = run.state === "failed" ? await acceptanceSnapshot(savedReviews) : "";
-  return c.html(runProgress(nav, run, sources, reviews, readiness, snapshot));
+  const readinessCampaign = run.state === "needs_input" && readiness?.state === "needs_input" && sources.some((source) => source.status === "loaded")
+    ? await campaigns.get(c.env.DB, run.campaign_id) : null;
+  const readinessToken = readinessCampaign && readiness ? await readinessAcceptanceToken(readiness, readinessCampaign) : "";
+  return c.html(runProgress(nav, run, sources, reviews, readiness, snapshot, readinessToken));
 });
 
 // Server-side cap on how many topics one run may write (cost control). The

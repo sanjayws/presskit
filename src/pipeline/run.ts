@@ -1,3 +1,4 @@
+import { acceptedGapsGuidance } from "../editorial/accepted-gaps";
 import { selectedChannels } from "../style/channels";
 /**
  * Run orchestration. One function per pipeline stage. Each stage advances run
@@ -50,7 +51,7 @@ import {
 } from "../content/similarity";
 import { logEvent } from "../log";
 import { scheduleStage, getRecovery, advanceResearch } from "./recovery";
-import { assessReadiness } from "../grounding/readiness";
+import { assessReadiness, loadReadiness } from "../grounding/readiness";
 
 async function enqueue(env: Env, msg: PipelineMessage): Promise<void> {
   await scheduleStage(env, msg);
@@ -135,6 +136,7 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
 
     const grounding = await groundingForRun(env, campaign, runId);
+    const readiness = await loadReadiness(env, runId);
     // Generate first, then atomically swap in the new topics (old set survives
     // a failed proposal — never delete-before-success). Research is oriented by
     // the campaign's article type (comparison = research the contenders, etc).
@@ -144,7 +146,7 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
       runId,
       campaign.idea,
       grounding,
-      `${articleTypeByValue(campaign.article_type).research}\nDestinations: ${selectedChannels(campaign.output_format, campaign.output_formats).map((format) => `${format}: ${channelProfile(format).summary}`).join("; ")}. For email and chat propose one focused message that fits the channel; for LinkedIn propose one professional insight. Channel suitability takes priority over SEO framing.`,
+      `${articleTypeByValue(campaign.article_type).research}\n${acceptedGapsGuidance(readiness?.acceptance ? readiness.gaps : undefined)}\nDestinations: ${selectedChannels(campaign.output_format, campaign.output_formats).map((format) => `${format}: ${channelProfile(format).summary}`).join("; ")}. For email and chat propose one focused message that fits the channel; for LinkedIn propose one professional insight. Channel suitability takes priority over SEO framing.`,
     );
 
     // Human picks next; no auto-advance past selection.
@@ -175,6 +177,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
     if (selected.length === 0) throw new Error("no topic selected for run");
 
     const evidence = await groundingEvidenceForRun(env, campaign, runId);
+    const readiness = await loadReadiness(env, runId);
     const grounding = evidence.text;
     const voice = voiceInstruction(campaign.voice_profile);
     const persona = optionInstruction(PERSONAS, campaign.persona);
@@ -211,6 +214,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
       if (effWords - reserve < (outputFormat === "chat" ? 30 : 80)) throw new Error("The links, call to action and signature leave too little space. Increase the word limit or shorten them.");
       const input = {
         originalBrief: campaign.idea,
+        ...(readiness?.acceptance ? { acceptedEvidenceGaps: readiness.gaps.map(({ requirement, missing }) => ({ requirement, missing })) } : {}),
         topicTitle: topic.title,
         angle: topic.angle,
         primaryKw: topic.primary_kw,
