@@ -77,6 +77,7 @@ export async function groundingForRun(env: Env, campaign: Campaign, runId: strin
 }
 export async function groundingEvidenceForRun(env: Env, campaign: Campaign, runId: string): Promise<GroundingEvidence> {
   const report = await loadSourceReport(env, runId);
+  if (campaign.article_type === "fiction" && !report.some((source) => source.status === "loaded")) return { text: "Fictional narrative: use the brief as creative premises, not verified factual evidence. Do not assert unsupported real-world claims.", sources: [] };
   const docIds = report.length ? report.filter((item) => item.status === "loaded" && item.docId).map((item) => item.docId!) : undefined;
   return loadGroundingEvidence(env, campaign.id, { docIds, query: `${campaign.idea}\n${campaign.include_ideas}` });
 }

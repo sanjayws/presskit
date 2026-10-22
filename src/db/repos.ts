@@ -8,7 +8,7 @@ const CAMPAIGN_UPDATABLE = new Set([
   "idea", "grounding_refs", "voice_profile", "max_words", "image_brief",
   "persona", "tone", "temperature", "signature", "image_style",
   "reference_links", "cta", "cta_action", "cta_target",
-  "include_ideas", "exclude_ideas", "bias_level", "output_format", "output_formats", "article_type",
+  "include_ideas", "exclude_ideas", "bias_level", "output_format", "output_formats", "article_type", "inline_image_count", "generation_version",
 ]);
 const ARTICLE_UPDATABLE = new Set([
   "title", "body_html", "excerpt", "slug", "meta_desc", "key_phrases", "output_body",
@@ -67,6 +67,8 @@ export interface Campaign {
   bias_level: number; // 1..5; 1 = neutral/honest, 5 = strongly promotional
   output_formats?: string; // JSON destinations; legacy rows use output_format
   output_format: string; // 'html' | 'social' | 'plain' | 'markdown' | 'word'
+  inline_image_count?: number;
+  generation_version?: number;
   article_type: string; // 'article' | 'comparison' | 'listicle' | 'howto' | 'news' | 'blog' | 'opinion' | 'review'
   created_at: number;
 }
@@ -83,6 +85,9 @@ export interface GroundingDoc {
 export interface Run {
   id: string;
   campaign_id: string;
+  inline_image_count?: number;
+  generation_version?: number;
+  writing_mode?: string;
   state: RunState;
   error: string | null;
   created_at: number;
@@ -185,6 +190,8 @@ export const campaigns = {
       bias_level?: number;
       output_format?: string;
       output_formats?: string;
+      inline_image_count?: number;
+      generation_version?: number;
       article_type?: string;
     },
   ): Promise<Campaign> {
@@ -210,13 +217,15 @@ export const campaigns = {
       bias_level: input.bias_level ?? 3,
       output_format: input.output_format ?? "html",
       output_formats: input.output_formats ?? "[]",
+      inline_image_count: input.inline_image_count ?? 0,
+      generation_version: input.generation_version ?? 1,
       article_type: input.article_type ?? "article",
       created_at: now(),
     };
     await exec(
       db,
-      `INSERT INTO campaigns (id, user_id, idea, grounding_refs, voice_profile, max_words, image_brief, persona, tone, temperature, signature, image_style, reference_links, cta, cta_action, cta_target, include_ideas, exclude_ideas, bias_level, output_format, output_formats, article_type, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO campaigns (id, user_id, idea, grounding_refs, voice_profile, max_words, image_brief, persona, tone, temperature, signature, image_style, reference_links, cta, cta_action, cta_target, include_ideas, exclude_ideas, bias_level, output_format, output_formats, article_type, inline_image_count, generation_version, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       c.id,
       c.user_id,
       c.idea,
@@ -239,6 +248,8 @@ export const campaigns = {
       c.output_format,
       c.output_formats!,
       c.article_type,
+      c.inline_image_count!,
+      c.generation_version!,
       c.created_at,
     );
     return c;
@@ -336,9 +347,13 @@ export const groundingDocs = {
 
 export const runs = {
   async create(db: D1Database, campaignId: string): Promise<Run> {
+    const campaign = await campaigns.get(db, campaignId);
     const r: Run = {
       id: newId("run"),
       campaign_id: campaignId,
+      inline_image_count: campaign?.inline_image_count || 0,
+      generation_version: campaign?.generation_version || 1,
+      writing_mode: campaign?.article_type || "",
       state: "drafting_topics",
       error: null,
       created_at: now(),
@@ -349,11 +364,14 @@ export const runs = {
     };
     await exec(
       db,
-      "INSERT INTO runs (id, campaign_id, state, created_at) VALUES (?, ?, ?, ?)",
+      "INSERT INTO runs (id, campaign_id, state, created_at, inline_image_count, generation_version, writing_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
       r.id,
       r.campaign_id,
       r.state,
       r.created_at,
+      r.inline_image_count!,
+      r.generation_version!,
+      r.writing_mode!,
     );
     return r;
   },

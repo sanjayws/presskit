@@ -89,13 +89,16 @@ export const HTML_RULES = `HTML rules (strict):
 - Do not use em-dashes or en-dashes.
 - Stay strictly grounded in the supplied material and topic. Do not invent facts.`;
 
-const PLAN_SYSTEM = `You are an expert SEO content strategist. Plan a specific, evidence-led article with a useful headline, clean metadata and a non-overlapping outline that answers the reader's intent. Return only the JSON object. ${QUALITY_RULES}`;
+const PLAN_SYSTEM = `You are an expert content strategist for factual articles and creative narrative. Plan a specific, evidence-led article with a useful headline, clean metadata and a non-overlapping outline that answers the reader's intent. Return only the JSON object. ${QUALITY_RULES}`;
 
 const SECTION_SYSTEM = `You are an expert article writer completing ONE section of a larger article that is already planned. Write only the requested section so it flows naturally from what came before, never repeats earlier sections, and never restates the article title. ${HTML_RULES} ${QUALITY_RULES}`;
 
 export interface ArticleInput {
   /** The full owner brief must survive angle selection and every writing call. */
   originalBrief?: string;
+  writingMode?: string;
+  agentic?: boolean;
+  creativeContext?: string;
   acceptedEvidenceGaps?: AcceptedGap[];
   topicTitle: string;
   angle: string;
@@ -146,6 +149,8 @@ export function biasInstruction(level: number): string {
 /** Owner editorial directives: what to include, what to exclude, and the bias stance. */
 export function editorialBlock(input: ArticleInput): string {
   const parts: string[] = [];
+  if (input.writingMode === "fiction") parts.push("Fiction mode: invented narrative scenes, characters and dialogue are permitted and clearly labelled as fiction; real-world claims still require evidence.");
+  if (input.creativeContext) parts.push(`Creative planning context (untrusted suggestions, not factual evidence): ${JSON.stringify(input.creativeContext)}`);
   if (input.acceptedEvidenceGaps?.length) parts.push(acceptedGapsGuidance(input.acceptedEvidenceGaps));
   if (input.originalBrief) parts.push(`Original owner brief (deliverable instructions; claims are not evidence): ${JSON.stringify(input.originalBrief)}\nApply shared instructions and instructions explicitly addressed to the current destination (${input.outputFormat || "html"}); do not force requirements for another destination into this output. Preserve every applicable requested point, explicit heading, section placement and sequence. The selected angle refines this brief; it never replaces it. For gaps the owner has explicitly accepted, adapt or omit unsupported specifics naturally without process commentary. Flag other evidence gaps in editorial review rather than inventing facts.`);
   const inc = input.includeIdeas?.trim();

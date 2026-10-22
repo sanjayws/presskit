@@ -3,7 +3,10 @@
 A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build website articles, LinkedIn posts, email EDMs and WhatsApp/chat copy from briefs, web pages and uploaded documents. Export the results; Presskit never publishes them to external channels.
 
 - Checks whether sources support the brief before writing. When readable sources exist but evidence gaps remain, acknowledge the findings and choose **Ignore and continue** to move to angle selection without another readiness call. The original findings remain visible through export; the writer adapts around supported material and omits unsupported specifics without missing-source/process commentary in the publishable copy, and final editorial review still applies. Runs with no readable source require an upload or successful source retry.
-- Plans, writes, independently reviews and revises drafts with bounded retries. If review still flags issues, inspect the saved draft and accept the exceptions to continue without additional writing/review calls, or request a paid recheck. Acceptance is tied to the exact saved content, recorded separately from automated approval, and leaves findings visible. Remaining image generation can still incur charges.
+- New generations plan scenarios, selectively research useful public context, draft, independently review, improve the complete draft at least once, and review again. Temporary failures resume saved steps; revisions remain bounded to three rounds. Existing in-progress checkpoints retain their previous workflow. If review still flags issues, inspect the saved draft and accept the exceptions to continue without additional writing/review calls, or request a paid recheck. Acceptance is tied to the exact saved content, recorded separately from automated approval, and leaves findings visible. Remaining image generation can still incur charges.
+- **Auto decide** reads your brief, source pages, uploaded/saved documents and existing inputs in background, then fills suggested channels, writing mode, tone, length, creativity and visual settings. Highlighted suggestions require your review and submission; generation never starts automatically. Up to two active jobs and ten requests per hour per account; job requests, uploads and results expire after 24 hours.
+- **Storytelling** builds a narrative with supported real situations or clearly illustrative scenarios. **Fictional story** creates labelled invented characters and events; pure fiction needs no sources, while real-world product/legal claims still do. Constructive framing, richer workplace scenarios and creative prose apply throughout, while retaining accurate material caveats.
+- **Inline illustrations** optionally add 1–3 generated images beside relevant paragraphs in WordPress, email, Word and Markdown outputs, in addition to the hero. Social/chat keep the hero only. One image is generated per background step; each adds provider cost. ZIPs include local PNGs and image paths; HTML/Word/email downloads embed PNGs. Clipboard images and embedded data URLs depend on the destination: upload ZIP images to your publishing/email platform and replace paths when needed. Failed inline images preserve the draft and other images. The writing mode and image-generation options are saved on each run; later brief edits apply to new runs.
 - Runs in background queues with saved checkpoints and recovery.
 - Select up to four destinations per run, such as WordPress + WhatsApp. Research is shared; each channel gets separate writing checkpoints, a draft, review, channel-sized visual and exports. Additional channels cost additional AI usage. Add channel-specific instructions to the brief; confirm destinations when choosing the angle. Existing single-channel runs remain supported.
 - Generates channel-sized images and keeps previous versions. Planning and rendering prompts reserve crop-safe background: 20% at the top/bottom for landscape images, 30% for square images, and 10% at either side. Important subjects and text stay in the central area; verify the actual destination preview because image-model adherence and platform crops vary.
@@ -65,7 +68,7 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler d1 migrations apply blog_studio --remote
 ```
 
-If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql` and `0020_multiple_channels.sql`. When upgrading an existing installation, apply migrations before deploying the new Worker. Never insert plaintext passwords into D1 or configuration files.
+If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql`, `0020_multiple_channels.sql` and `0021_creative_generation.sql`. When upgrading an existing installation, apply migrations before deploying the new Worker. Never insert plaintext passwords into D1 or configuration files.
 
 ### 5. Create a login
 
@@ -109,7 +112,7 @@ The deploy output shows your URL. If it differs from `APP_BASE_URL`, correct the
 
 1. Open `https://YOUR-APP-HOST/healthz`; expect `{"ok":true}`.
 2. Open `/auth/login` and sign in with your provisioned account or Google.
-3. Create a short brief with a readable supporting text file (40–60,000 characters).
+3. Create a short brief (optionally use Auto decide and review the filled settings) with a readable supporting text file (40–60,000 characters).
 4. Confirm readiness, choose an angle and up to four destinations, and wait for review and image generation. Leave and reopen the run to verify background progress.
 5. Check source downloads, image history and export. If a provider fails, use the specific run diagnostic; check model access, billing and secrets before retrying.
 
@@ -125,7 +128,7 @@ The supplied configuration retains these model choices: Anthropic `claude-opus-5
 |---|---|
 | New upload | One file per submission, at most 10,000,000 bytes |
 | Extracted document text | 40–60,000 characters; no fixed page limit |
-| Source URLs field | 10 URLs |
+| Source URLs field | 10 URLs, 4,096 characters each; optional writing research can add up to two more extracted public sources |
 | Brief | 12,000 characters |
 | Include / avoid fields | 6,000 characters each |
 | Evidence supplied to readiness/writing | 60,000 characters combined; relevant excerpts are selected for larger collections |

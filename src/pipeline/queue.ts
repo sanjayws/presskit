@@ -1,3 +1,4 @@
+import { stageAutoDecide } from "../editorial/auto-decide";
 /**
  * Queue consumer. One stage per message, batch size 1. Dispatches to the stage
  * handler; on failure marks the run failed and acks (the state carries the error
@@ -27,6 +28,7 @@ import {
 
 async function dispatch(env: Env, msg: PipelineMessage, attempt: number): Promise<void> {
   switch (msg.stage) {
+    case "brief_options": return stageAutoDecide(env, msg.runId);
     case "ingest":
       return stageIngest(env, msg.runId);
     case "assess":

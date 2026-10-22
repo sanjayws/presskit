@@ -1,3 +1,4 @@
+import { exportInlineHtml, loadInline, inlineKey } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
  * available featured PNG/creative brief. Nothing leaves the app except by the user's
@@ -49,6 +50,7 @@ function escapeHtml(s: string): string {
 
 /** Assemble the zip bytes for one article. Fetches private assets from R2. */
 export async function buildBundle(env: Env, article: Article): Promise<Uint8Array> {
+  article = { ...article, body_html: await exportInlineHtml(env, article, true) };
   const format = isOutputFormat(article.output_format) ? article.output_format : "html";
   const phrases = safeArray(article.key_phrases);
   const meta: BundleMeta = {
@@ -68,8 +70,8 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
   let mainBody = articleHtmlDocument(article);
   if (format !== "html") {
     const rendered =
-      !isRichFormat(format) && article.output_body
-        ? { body: article.output_body, ext: format === "markdown" ? "md" : "txt" }
+      !isRichFormat(format) && format !== "markdown" && article.output_body
+        ? { body: article.output_body, ext: "txt" }
         : renderOutput(article.body_html, format, {
             keyPhrases: meta.key_phrases,
             title: article.title,
@@ -99,6 +101,13 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
     files["image-brief.json"] = new Uint8Array(await brief.arrayBuffer());
   }
 
+  const inline = await loadInline(env, article.id);
+  for (const [i, slot] of (inline?.slots || []).entries()) {
+    if (slot.state !== "ready") continue;
+    const object = await env.ASSETS.get(inlineKey(article.id, i + 1));
+    if (object && object.size <= 6000000) files[`inline-${i + 1}.png`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
+  }
+  if (inline?.slots.length) files["inline-images.txt"] = strToU8("Inline illustrations are included as inline-N.png. Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n");
   return zipSync(files, { level: 6 });
 }
 

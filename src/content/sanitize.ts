@@ -8,7 +8,7 @@
 const ALLOWED_TAGS = new Set([
   "p", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "a",
   "strong", "em", "b", "i", "br", "table", "thead", "tbody", "tr",
-  "th", "td", "caption", "code", "pre", "hr",
+  "th", "td", "caption", "code", "pre", "hr", "figure", "img",
 ]);
 
 // Removed entirely, including their contents.
@@ -20,6 +20,8 @@ const DANGEROUS_TAGS = new Set([
 
 // Per-tag allowed attributes. Everything else (class, id, style, on*, etc.) dropped.
 const ATTR_ALLOW: Record<string, Set<string>> = {
+  img: new Set(["src", "alt", "loading"]),
+  figure: new Set(["data-presskit-inline"]),
   a: new Set(["href", "title"]),
   th: new Set(["colspan", "rowspan"]),
   td: new Set(["colspan", "rowspan"]),
@@ -36,7 +38,7 @@ function safeHref(value: string): boolean {
 }
 
 /** Sanitize an HTML fragment against the allowlist. Async (streams through HTMLRewriter). */
-export async function sanitizeHtml(html: string): Promise<string> {
+export async function sanitizeHtml(html: string, articleId?: string): Promise<string> {
   const rewriter = new HTMLRewriter().on("*", {
     element(el) {
       const tag = el.tagName.toLowerCase();
@@ -48,6 +50,8 @@ export async function sanitizeHtml(html: string): Promise<string> {
         el.removeAndKeepContent(); // unwrap unknown tags, keep their text
         return;
       }
+      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.png`))) { el.remove(); return; }
+      if (tag === "figure" && !/^[1-3]$/.test(el.getAttribute("data-presskit-inline") || "")) el.removeAttribute("data-presskit-inline");
       const allow = ATTR_ALLOW[tag] ?? EMPTY;
       const names = Array.from(el.attributes, (a) => a[0] ?? "");
       for (const name of names) {

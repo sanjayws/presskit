@@ -38,6 +38,7 @@ export async function assessReadiness(env: Env, campaign: Campaign, runId: strin
   const sources = await loadSourceReport(env, runId);
   const evidence = sources.some((source) => source.status === "loaded") ? await groundingEvidenceForRun(env, campaign, runId) : null;
   const input = JSON.stringify({ brief: campaign.idea, mustCover: campaign.include_ideas, avoid: campaign.exclude_ideas,
+    writingMode: campaign.article_type,
     destinations: selectedChannels(campaign.output_format, campaign.output_formats).map((format) => ({ destination: format, channel: channelProfile(format).summary, maxWords: Math.min(campaign.max_words, channelProfile(format).maxWords) })),
     maxWords: Math.min(campaign.max_words, channelProfile(campaign.output_format).maxWords),
     sources, evidence: evidence?.sources ?? [],
@@ -46,7 +47,9 @@ export async function assessReadiness(env: Env, campaign: Campaign, runId: strin
   const previous = await loadReadiness(env, runId);
   if (previous?.fingerprint === fingerprint && previous.state !== "checking") return previous;
   let report: ReadinessReport;
-  if (!evidence) {
+  if (!evidence && campaign.article_type === "fiction") {
+    report = { version: 1, fingerprint, state: "ready", summary: "Your fictional premise is ready. Invented narrative events will be identified as fiction; real-world claims still require evidence.", gaps: [], checkedAt: Date.now() };
+  } else if (!evidence) {
     report = { version: 1, fingerprint, state: "needs_input", summary: "None of the supplied sources could be read. Writing has not started.",
       gaps: [{ requirement: campaign.idea.slice(0, 1200), missing: "There is no readable source material to support this brief.",
         action: "Open the source details below. Upload a readable copy of the relevant pages, or replace blocked links with accessible sources, then check the brief again." }], checkedAt: Date.now() };

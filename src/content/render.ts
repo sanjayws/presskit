@@ -123,6 +123,8 @@ function mdInline(nodes: Node[]): string {
     .map((n) => {
       if (n.type === "text") return escMdText(collapseWs(n.text));
       switch (n.tag) {
+        case "img":
+          return n.attrs.src ? `![${escMdText(n.attrs.alt || "Illustration")}](${mdDestination(n.attrs.src)})` : "";
         case "br":
           return "  \n";
         case "strong":
@@ -226,6 +228,9 @@ function mdBlocks(nodes: Node[]): string {
         break;
       case "table":
         out.push(mdTable(n));
+        break;
+      case "img":
+        out.push(mdInline([n]));
         break;
       case "p":
         out.push(escMdLeading(mdInline(n.children).trim()));

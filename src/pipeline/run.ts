@@ -1,3 +1,5 @@
+import { inlineImageStep } from "../images/inline";
+import { creativeContextStep } from "../grounding/creative";
 import { acceptedGapsGuidance } from "../editorial/accepted-gaps";
 import { selectedChannels } from "../style/channels";
 /**
@@ -92,6 +94,9 @@ export async function stageIngest(env: Env, runId: string): Promise<void> {
     if (saved && saved.stage !== "ingest") return;
     const campaign = await campaigns.get(env.DB, run.campaign_id);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
+    campaign.inline_image_count = run.inline_image_count ?? 0;
+    campaign.generation_version = run.generation_version ?? 1;
+    campaign.article_type = run.writing_mode || campaign.article_type;
     const complete = await ingestSources(env, campaign, runId);
     await advanceResearch(env, runId, "ingest", complete ? "assess" : "ingest", owner);
   } finally { await runs.releaseStage(env.DB, runId, owner); }
@@ -108,6 +113,7 @@ export async function stageAssess(env: Env, runId: string): Promise<void> {
     if (saved && saved.stage !== "assess") return;
     const campaign = await campaigns.get(env.DB, run.campaign_id);
     if (!campaign) throw new Error("The brief for this run is missing.");
+    campaign.article_type = run.writing_mode || campaign.article_type;
     const report = await assessReadiness(env, campaign, runId);
     if (report.state === "needs_input") {
       await runs.handOff(env.DB, runId, "drafting_topics", "needs_input", owner);
@@ -134,6 +140,9 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
   try {
     const campaign = await campaigns.get(env.DB, run.campaign_id);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
+    campaign.inline_image_count = run.inline_image_count ?? 0;
+    campaign.generation_version = run.generation_version ?? 1;
+    campaign.article_type = run.writing_mode || campaign.article_type;
 
     const grounding = await groundingForRun(env, campaign, runId);
     const readiness = await loadReadiness(env, runId);
@@ -172,11 +181,22 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
   try {
     const campaign = await campaigns.get(env.DB, run.campaign_id);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
+    campaign.inline_image_count = run.inline_image_count ?? 0;
+    campaign.generation_version = run.generation_version ?? 1;
+    campaign.article_type = run.writing_mode || campaign.article_type;
 
     const selected = await topicsRepo.selectedForRun(env.DB, runId);
     if (selected.length === 0) throw new Error("no topic selected for run");
 
-    const evidence = await groundingEvidenceForRun(env, campaign, runId);
+    let evidence = await groundingEvidenceForRun(env, campaign, runId);
+    const creativeContext = campaign.generation_version === 2 ? await creativeContextStep(env, runId, campaign, evidence.text) : "";
+    if (creativeContext === null) {
+      await runs.releaseStage(env.DB, runId, owner);
+      await enqueue(env, { runId, stage: "write" });
+      return;
+    }
+    // Research may have added source records on a previous delivery.
+    evidence = await groundingEvidenceForRun(env, campaign, runId);
     const readiness = await loadReadiness(env, runId);
     const grounding = evidence.text;
     const voice = voiceInstruction(campaign.voice_profile);
@@ -214,6 +234,9 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
       if (effWords - reserve < (outputFormat === "chat" ? 30 : 80)) throw new Error("The links, call to action and signature leave too little space. Increase the word limit or shorten them.");
       const input = {
         originalBrief: campaign.idea,
+        writingMode: campaign.article_type,
+        agentic: campaign.generation_version === 2,
+        creativeContext,
         ...(readiness?.acceptance ? { acceptedEvidenceGaps: readiness.gaps.map(({ requirement, missing }) => ({ requirement, missing })) } : {}),
         topicTitle: topic.title,
         angle: topic.angle,
@@ -322,6 +345,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
     if (list.length === 0) throw new Error("no articles for image stage");
 
     const campaign = await campaigns.get(env.DB, run.campaign_id);
+    if (campaign) campaign.inline_image_count = run.inline_image_count ?? 0;
     for (const article of list) {
       // Retry only incomplete assets; queue replays do not buy another image.
       if (article.png_r2_key || (await imageJobs.get(env.DB, article.id))?.state === "failed") continue;
@@ -341,6 +365,14 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
       }
       // One visual per delivery, so several channels do not share a long lease.
       if (list.length > 1) {
+        await runs.releaseStage(env.DB, runId, lease);
+        await enqueue(env, { runId, stage: "image" });
+        return;
+      }
+    }
+
+    for (const article of await articlesRepo.listForRun(env.DB, runId)) {
+      if (!await inlineImageStep(env, article, campaign)) {
         await runs.releaseStage(env.DB, runId, lease);
         await enqueue(env, { runId, stage: "image" });
         return;

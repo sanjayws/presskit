@@ -4,6 +4,7 @@ import type { Queue } from "@cloudflare/workers-types";
 export interface PipelineMessage {
   runId: string;
   stage:
+    | "brief_options"
     | "ingest"
     | "assess"
     | "topics"

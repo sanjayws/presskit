@@ -1,3 +1,5 @@
+import { optionJobKey, optionResultKey, recoverOptionJobs, type OptionRequest } from "./editorial/auto-decide";
+import { exportInlineHtml, inlineKey, loadInline } from "./images/inline";
 import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
 import { channelBudgetError } from "./content/channel-budget";
 import { MAX_CHANNELS, submittedChannels } from "./style/channels";
@@ -31,7 +33,7 @@ import {
   groundingDocs,
   type User,
 } from "./db/repos";
-import { validateGroundingUrl } from "./grounding/ingest";
+import { validateGroundingUrl, uploadText } from "./grounding/ingest";
 import { enqueueBundle, enqueueWrite, resumeTopics, startRun } from "./pipeline/run";
 import { handleQueue } from "./pipeline/queue";
 import { buildBundle } from "./bundle/export";
@@ -296,6 +298,7 @@ interface CampaignFields {
   exclude_ideas: string;
   bias_level: number;
   article_type: string;
+  inline_image_count: number;
   output_format: OutputFormat;
   output_formats: string[];
 }
@@ -333,6 +336,7 @@ function parseCampaignFields(form: FormData): CampaignFields {
     article_type: isArticleType(fstr(form, "article_type"))
       ? fstr(form, "article_type")
       : "article",
+    inline_image_count: Number(fstr(form, "inline_image_count", "0")),
     output_formats: submittedChannels(form),
     output_format: isOutputFormat(fstr(form, "output_format")) ? fstr(form, "output_format") as OutputFormat : "html",
   };
@@ -348,7 +352,9 @@ async function validateSubmission(
   userId: string,
   f: CampaignFields,
   savedDocumentCount = 0,
+  planning = false,
 ): Promise<Response | null> {
+  if (!Number.isInteger(f.inline_image_count) || f.inline_image_count < 0 || f.inline_image_count > 3) return c.text("Choose 0–3 inline images per supported output.", 400);
   if (f.output_formats.length > MAX_CHANNELS || f.output_formats.some((format) => !isOutputFormat(format))) return c.text(`Choose up to ${MAX_CHANNELS} valid destinations.`, 400);
   const budgetError = channelBudgetError(f, f.output_formats);
   if (budgetError) return c.text(budgetError, 400);
@@ -364,7 +370,7 @@ async function validateSubmission(
   if (f.urls.length > MAX_URLS) {
     return c.text(`Too many grounding URLs (max ${MAX_URLS}).`, 400);
   }
-  if (f.urls.length === 0 && !f.upload && !savedDocumentCount) {
+  if (!planning && f.article_type !== "fiction" && f.urls.length === 0 && !f.upload && !savedDocumentCount) {
     return c.text("Provide at least one source URL or a readable supporting document. Saved files marked unreadable cannot be used.", 400);
   }
   for (const u of f.urls) {
@@ -374,6 +380,7 @@ async function validateSubmission(
       return c.text(`${e instanceof Error ? e.message : "invalid url"}`, 400);
     }
   }
+  if (planning) return null;
   const act = await runs.activeCountsForUser(c.env.DB, userId);
   if (act.generating + act.awaiting >= MAX_ACTIVE_RUNS) {
     // Be truthful about WHO each run is waiting on: a run parked at the angle
@@ -399,6 +406,53 @@ async function validateSubmission(
   }
   return null;
 }
+
+app.post("/brief/auto-decide", async (c) => {
+  const user = c.get("user");
+  const form = await c.req.formData();
+  const f = parseCampaignFields(form);
+  const bad = await validateSubmission(c, user.id, f, 0, true);
+  if (bad) return bad;
+  const campaignId = fstr(form, "campaign_id");
+  if (campaignId && (await campaigns.get(c.env.DB, campaignId))?.user_id !== user.id) return c.notFound();
+  const bytes = f.upload ? new Uint8Array(await f.upload.arrayBuffer()) : null;
+  if (f.upload && bytes) {
+    if (/\.pdf$/i.test(f.upload.name) && new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") return c.text("This PDF has an invalid file header. Export a new copy.", 400);
+    if (!/\.(pdf|docx?|xlsx?|pptx?)$/i.test(f.upload.name)) {
+      try { uploadText(new TextDecoder().decode(bytes)); } catch (error) { return c.text(sourceFailureGuidance(error), 400); }
+    }
+  }
+  const id = `opt_${crypto.randomUUID().replace(/-/g, "")}`;
+  const inserted = await c.env.DB.prepare(`INSERT INTO brief_option_jobs(id,user_id,created_at)
+    SELECT ?,?,? WHERE (SELECT COUNT(*) FROM brief_option_jobs WHERE user_id=? AND state IN ('queued','working') AND created_at>?)<2
+    AND (SELECT COUNT(*) FROM brief_option_jobs WHERE user_id=? AND created_at>?)<10`)
+    .bind(id, user.id, Date.now(), user.id, Date.now() - 86400000, user.id, Date.now() - 3600000).run();
+  if (!inserted.meta.changes) return c.text("Auto decide allows two background jobs at a time and ten requests per hour. Wait for a current job or select settings manually.", 429);
+  const fields = Object.fromEntries([...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  fields.output_formats = JSON.stringify(f.output_formats);
+  const request: OptionRequest = { fields, urls: f.urls, text: "", read: 0, uploadDone: !bytes, warnings: [], ...(campaignId ? { campaignId } : {}) };
+  try {
+    if (bytes && f.upload) {
+      const extension = f.upload.name.slice(f.upload.name.lastIndexOf("."));
+      request.filename = f.upload.name.length > 240 ? f.upload.name.slice(0, 240 - extension.length) + extension : f.upload.name; request.fileKey = `brief-options/${id}/upload`;
+      await c.env.ASSETS.put(request.fileKey, bytes);
+    }
+    await c.env.ASSETS.put(optionJobKey(id), JSON.stringify(request));
+  } catch {
+    await c.env.DB.prepare("UPDATE brief_option_jobs SET state='failed',error='Could not save the configuration request. Try again.' WHERE id=?").bind(id).run();
+    return c.text("Could not save the configuration request. Your brief is kept; try again.", 503);
+  }
+  try { await c.env.PIPELINE.send({ runId: id, stage: "brief_options" }); } catch { /* watchdog recovers */ }
+  return c.json({ id }, 202);
+});
+
+app.get("/brief/auto-decide/:id", async (c) => {
+  const job = await c.env.DB.prepare("SELECT id,state,error FROM brief_option_jobs WHERE id=? AND user_id=? AND created_at>?")
+    .bind(c.req.param("id"), c.get("user").id, Date.now() - 86400000).first<{ id: string; state: string; error: string | null }>();
+  if (!job) return c.notFound();
+  const result = job.state === "ready" ? await c.env.ASSETS.get(optionResultKey(job.id)) : null;
+  return c.json({ state: job.state, error: job.error, ...(result && result.size < 20000 ? await result.json<Record<string, unknown>>() : {}) });
+});
 
 // --- create campaign + start a run -----------------------------------------
 app.post("/campaigns", async (c) => {
@@ -427,6 +481,8 @@ app.post("/campaigns", async (c) => {
     exclude_ideas: f.exclude_ideas,
     bias_level: f.bias_level,
     article_type: f.article_type,
+    inline_image_count: f.inline_image_count,
+    generation_version: 2,
     output_format: f.output_format,
     output_formats: JSON.stringify(f.output_formats),
   });
@@ -489,6 +545,8 @@ app.post("/campaigns/:id", async (c) => {
     exclude_ideas: f.exclude_ideas,
     bias_level: f.bias_level,
     article_type: f.article_type,
+    inline_image_count: f.inline_image_count,
+    generation_version: 2,
     output_format: f.output_format,
     output_formats: JSON.stringify(f.output_formats),
   });
@@ -629,7 +687,7 @@ app.get("/runs/:id", async (c) => {
       const review = await loadEditorial(c.env, article.id);
       if (review) reviews[article.id] = review;
     }
-    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources, readiness));
+    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources, readiness, Object.fromEntries(await Promise.all(list.map(async (article) => [article.id, await loadInline(c.env, article.id)])))));
   }
   const savedReviews = run.state === "failed" || run.state === "styling"
     ? await Promise.all((await articles.listForRun(c.env.DB, run.id)).map(async (article) => ({ article, checkpoint: await loadEditorial(c.env, article.id) }))) : [];
@@ -819,6 +877,15 @@ app.get("/articles/:id/images", async (c) => {
   return c.json({ ...imageStatus(article, job), html: imageGallery(article, versions), count: versions.length });
 });
 
+app.get("/articles/:id/inline-images/:file", async (c) => {
+  const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
+  const slot = /^([1-3])\.png$/.exec(c.req.param("file"));
+  if (!article || !slot) return c.notFound();
+  const object = await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1])));
+  if (!object) return c.notFound();
+  return new Response(object.body, { headers: { "content-type": "image/png", "cache-control": "private, no-store" } });
+});
+
 app.get("/articles/:id/images/:version/:asset", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   if (!article) return c.notFound();
@@ -873,10 +940,11 @@ app.get("/articles/:id/output", async (c) => {
   const a = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   if (!a) return c.notFound();
   const format: OutputFormat = isOutputFormat(a.output_format) ? a.output_format : "html";
+  const exportBody = await exportInlineHtml(c.env, a);
   const rendered =
-    !isRichFormat(format) && a.output_body
-      ? { body: a.output_body, ext: format === "markdown" ? "md" : "txt", mime: format === "markdown" ? "text/markdown; charset=utf-8" : "text/plain; charset=utf-8" }
-      : renderOutput(a.body_html, format, { keyPhrases: parseKeyPhrases(a.key_phrases), title: a.title, excerpt: a.excerpt, maxWords: Number.MAX_SAFE_INTEGER });
+    !isRichFormat(format) && format !== "markdown" && a.output_body
+      ? { body: a.output_body, ext: "txt", mime: "text/plain; charset=utf-8" }
+      : renderOutput(exportBody, format, { keyPhrases: parseKeyPhrases(a.key_phrases), title: a.title, excerpt: a.excerpt, maxWords: Number.MAX_SAFE_INTEGER });
   const filename = `${safeFilename(a.slug, "article")}.${rendered.ext}`;
   return new Response(rendered.body, {
     headers: {
@@ -921,7 +989,7 @@ app.post("/articles/:id", async (c) => {
 
   // Body: re-run the exact same allowlist sanitizer + dash strip as generation.
   const bodyIn = typeof payload.body_html === "string" ? payload.body_html : a.body_html;
-  const body_html = stripDashes(await sanitizeHtml(bodyIn));
+  const body_html = stripDashes(await sanitizeHtml(bodyIn, a.id));
   const title = stripDashes(plainText(payload.title, a.title)).slice(0, 200).trim();
   const meta_desc = stripDashes(plainText(payload.meta_desc, a.meta_desc)).slice(0, 160).trim();
   const excerpt = stripDashes(plainText(payload.excerpt, a.excerpt)).slice(0, 400).trim();
@@ -961,7 +1029,7 @@ app.post("/articles/:id", async (c) => {
 export default {
   fetch: app.fetch,
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    await Promise.all([recoverStalledRuns(env), cleanDeletedAssets(env), env.DB.prepare("DELETE FROM login_attempts WHERE window_start<?").bind(Date.now() - 24 * 60 * 60_000).run()]);
+    await Promise.all([recoverStalledRuns(env), recoverOptionJobs(env), cleanDeletedAssets(env), env.DB.prepare("DELETE FROM login_attempts WHERE window_start<?").bind(Date.now() - 24 * 60 * 60_000).run()]);
   },
   async queue(batch: MessageBatch<PipelineMessage>, env: Env): Promise<void> {
     await handleQueue(batch, env);

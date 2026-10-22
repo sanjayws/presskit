@@ -52,4 +52,6 @@ button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:7p
 .channel-choice .field-help{display:block;font-weight:400;margin:4px 0 0;line-height:1.5}
 .channel-choice input[type=checkbox],.exception-choice input[type=checkbox]{width:18px;height:18px;min-width:18px;margin:3px 0;padding:0;display:inline-block;vertical-align:middle}
 .exception-choice{display:flex;gap:10px;align-items:flex-start}
+
+.auto-decide-panel{margin:20px 0;padding:18px;background:var(--card-2);border:1px solid var(--line);border-radius:10px}.auto-decide{width:100%;min-height:52px;font-size:18px}.ai-suggested{outline:2px solid var(--accent);outline-offset:2px}.rte figure{margin:24px 0}.rte figure img{display:block;max-width:100%;height:auto;border-radius:8px}
 `;

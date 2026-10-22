@@ -95,6 +95,7 @@ const ALLOWED_CONTENT_TYPES = ["text/html", "text/plain", "text/markdown", "text
  * hosts. Throws on any violation.
  */
 export function validateGroundingUrl(raw: string): URL {
+  if (raw.length > 4096) throw new Error("Keep each grounding URL to 4,096 characters or fewer.");
   let u: URL;
   try {
     u = new URL(raw);
@@ -193,11 +194,12 @@ async function fetchWithRedirectPolicy(startUrl: string): Promise<Response> {
 }
 
 /** Fetch a URL (with SSRF policy + limits), clean it, store it. */
-export async function ingestUrl(
-  env: Env,
-  campaignId: string,
-  url: string,
-): Promise<IngestResult> {
+export async function ingestUrl(env: Env, campaignId: string, url: string): Promise<IngestResult> {
+  return store(env, campaignId, "url", url, await readUrlContent(env, url));
+}
+
+/** Read using the same URL, redirect and size policy without persisting a campaign. */
+export async function readUrlContent(env: Env, url: string): Promise<string> {
   let res: Response;
   try {
     res = await fetchWithRedirectPolicy(url);
@@ -215,7 +217,7 @@ export async function ingestUrl(
     await res.body?.cancel();
     if (res.status === 403 && env.BROWSER) {
       const rendered = htmlToText(await renderSourcePage(env, url));
-      if (isUsableWebText(rendered)) return store(env, campaignId, "url", url, rendered);
+      if (isUsableWebText(rendered)) return rendered;
     }
     if (isRetryableStatus(res.status)) {
       throw new RetryableError(`grounding url ${res.status}: ${url}`);
@@ -242,7 +244,7 @@ export async function ingestUrl(
   if (!isUsableWebText(text)) {
     throw new Error("grounding url requires a browser or blocks automated access");
   }
-  return store(env, campaignId, "url", url, text);
+  return text;
 }
 
 function isUsableWebText(text: string): boolean {

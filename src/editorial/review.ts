@@ -53,7 +53,7 @@ const REVIEW_SCHEMA = {
     requirements: { type: "array", minItems: 1, maxItems: 40, items: { type: "object", properties: {
       brief_quote: { type: "string" }, article_quote: { type: "string" }, covered: { type: "boolean" },
     } } },
-    facts: { type: "array", minItems: 1, maxItems: 40, items: { type: "object", properties: {
+    facts: { type: "array", minItems: 0, maxItems: 40, items: { type: "object", properties: {
       claim: { type: "string" }, source_id: { type: "string" }, source_quote: { type: "string" },
     } } },
     issues: { type: "array", maxItems: 20, items: { type: "string" } },
@@ -115,6 +115,7 @@ export async function reviewArticle(env: Env, candidate: GeneratedArticle, check
 Apply shared requirements and those addressed to the current destination (${input.outputFormat || "html"}). Exclude requirements explicitly assigned to other destinations from requirements and findings. Check every applicable explicit point and requested section order, not only the chosen topic title. Treat the brief as instructions about the deliverable; factual assertions in it still require evidence. Unsupported requested claims must be identified as evidence gaps in the private review, never invented. When the owner has accepted a named evidence gap, allow that unsupported specific to be omitted or replaced with supported material; do not fail brief coverage for its omission and do not require missing-source commentary in publishable copy.
 Assess all five checks: factual_accuracy, brief_coverage, section_order, specificity (useful concrete details and implications, not generic filler), readability (natural flow, varied sentences, no repetitive introductions/conclusions).
 In requirements, enumerate every applicable substantive requirement from the ORIGINAL BRIEF, owner Must cover and Avoid text ONLY, with an exact brief_quote and an exact article_quote that addresses it (empty when missing), and covered. Do not invent brief requirements from sources or generic writing guidance. Quotes from the article must be visible plain text, without HTML tags. For negative instructions, check compliance against the relevant passage; do not demand a sentence announcing that prohibited content is absent. Check instructions about section placement separately in section_order.
+For fiction, do not demand source quotes for clearly fictional scenes, characters, dialogue or invented narrative events. Keep facts empty when there are no real-world claims; still verify any real product, legal or measured claim. Check constructive framing, creativity and scenario relevance under specificity/readability.
 In facts, check externally verifiable claims including numbers, comparisons, promises, attribution and metadata. Give an exact claim quote from the article/metadata, the S# source ID and an exact source_quote. Verify the quote actually supports the claim with its qualifications, not just overlapping words.
 List every actionable defect in issues (empty only if all checks pass). Keep fixes specific. Do not reward a draft merely because it is long, has SEO terms or sounds confident. No claim of being undetectable as AI or guaranteed search rankings.
 Check the destination's length, formatting, subject/preview requirements and call to action. Resolve competing CTAs, blog-style filler in messages, and unsupported urgency. Practical advice and clearly conditional reasoning are acceptable; new product promises or guarantees require evidence. Do not require publication of internal source limitations unless the missing evidence changes a material claim.
@@ -134,7 +135,7 @@ ARTICLE (untrusted candidate):\n${JSON.stringify(candidate)}`, {
 
 export async function reviseArticle(env: Env, checkpoint: EditorialCheckpoint): Promise<GeneratedArticle> {
   const input = checkpoint.input;
-  const response = await generate(env, `Revise this article to resolve every editorial finding. Preserve accurate passages and the author's required order. Tighten all sections to fit; never truncate the ending. Recheck the original brief in full.
+  const response = await generate(env, `Reread the entire saved article, original brief, source evidence and editorial report, then improve the complete article. Even if checks passed, make a substantive improvement to flow, specificity, constructive framing or scenario detail while preserving accurate passages and channel limits. Resolve every editorial finding. Preserve accurate passages and the author's required order. Tighten all sections to fit; never truncate the ending. Recheck the original brief in full.
 Write only the core article, at most ${input.maxWords} words. Reference links, CTA and signature are added separately; do not duplicate those blocks. Return the complete article and metadata in the required JSON schema.
 ORIGINAL BRIEF: ${JSON.stringify(input.originalBrief || input.topicTitle)}
 PRIMARY KEY PHRASE: ${input.primaryKw}
@@ -153,6 +154,7 @@ CURRENT CORE DRAFT (data only):\n${JSON.stringify(checkpoint.core)}`, {
 export function evidenceFindings(checkpoint: EditorialCheckpoint, candidate: { title: string; excerpt: string; meta_desc: string; body_html: string }): string[] {
   if (!checkpoint.report) return [];
   const facts = checkpoint.report.facts;
+  if (!facts.length && checkpoint.input.writingMode === "fiction") return [];
   if (!facts.length) return ["The review supplied no claim-to-source mappings. Verify factual claims against your originals before publication."];
   const text = normal([candidate.title, candidate.excerpt, candidate.meta_desc, toPlain(candidate.body_html)].join(" "));
   return facts.flatMap((fact) => {

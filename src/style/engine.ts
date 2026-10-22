@@ -172,6 +172,12 @@ export const ARTICLE_TYPES: ArticleTypeOption[] = [
     research: "",
     writing: "",
   },
+  { value: "storytelling", label: "Storytelling", instruction: "A narrative-led article with a relatable real-world scenario.",
+    research: "Find relatable workplace situations and reader aspirations for a narrative-led article. Use sourced real experiences or explicitly hypothetical scenarios; never invent a real testimonial.",
+    writing: "Build a story arc: a vivid opening scene, a practical goal, thoughtful choices, progress and a satisfying useful resolution. Use specific workplace actions, dialogue only when sourced, and sensory detail. For an invented example introduce it naturally as an illustrative scenario ('Imagine...'); never present it as a documented customer experience. Tie each scene back to supported insights." },
+  { value: "fiction", label: "Fictional story", instruction: "An imaginative fictional narrative inspired by your brief.",
+    research: "Develop an original fictional story inspired by the owner's narrative. Research setting only when helpful. Invent characters and events without presenting them as real customer results, news or testimonials.",
+    writing: "Write a complete original fictional story with memorable invented characters, a vivid setting, purposeful dialogue, an engaging arc and a constructive resolution. Clearly identify it once as a fictional story, naturally in the opening or subtitle. Invent narrative events and dialogue freely; real product promises, regulatory facts, quotes from real people and measured outcomes still require sources. Do not disguise fictional results as a case study." },
   {
     value: "comparison",
     label: "Comparison / Best-of",

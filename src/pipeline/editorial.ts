@@ -94,7 +94,7 @@ export async function stageEditorial(env: Env, runId: string): Promise<void> {
         await articles.update(env.DB, article.id, { ...candidate, key_phrases: JSON.stringify(candidate.key_phrases),
           output_body: isRichFormat(format) ? "" : renderOutput(candidate.body_html, format, { keyPhrases: candidate.key_phrases, title: candidate.title, maxWords: Number.MAX_SAFE_INTEGER }).body });
         checkpoint.report = await reviewArticle(env, candidate, checkpoint);
-        checkpoint.state = checkpoint.report.passed ? "passed" : checkpoint.revision >= MAX_REVISIONS ? "needs_attention" : "revise";
+        checkpoint.state = checkpoint.report.passed && (!checkpoint.input.agentic || checkpoint.revision >= 1) ? "passed" : checkpoint.revision >= MAX_REVISIONS ? "needs_attention" : "revise";
         await saveEditorial(env, article.id, checkpoint);
         logEvent("article.review", { run_id: runId, article_id: article.id, revision: checkpoint.revision, passed: checkpoint.report.passed, issue_count: checkpoint.report.issues.length });
       }

@@ -52,6 +52,26 @@ describe("independent editorial loop", () => {
     await stageEditorial(f.bindings, f.run.id);
     expect((await loadEditorial(env, f.article.id))?.state).toBe("passed");
   });
+  it("requires a full improvement and re-review for new agentic drafts even after an initial pass", async () => {
+    const f = await fixture(); const c = checkpoint(); c.input.agentic = true;
+    await saveEditorial(env, f.article.id, c);
+    reply(review()); await stageEditorial(f.bindings, f.run.id);
+    expect((await loadEditorial(env, f.article.id))?.state).toBe("revise");
+    reply({ ...core, body_html: `${core.body_html}<p>Plan the next useful step.</p>` }, (body) => body.includes("substantive improvement"));
+    await stageEditorial(f.bindings, f.run.id);
+    reply(review()); await stageEditorial(f.bindings, f.run.id);
+    expect((await loadEditorial(env, f.article.id))?.state).toBe("passed");
+    expect((await loadEditorial(env, f.article.id))?.revision).toBe(1);
+    await stageEditorial(f.bindings, f.run.id);
+    expect((await runs.get(env.DB, f.run.id))?.state).toBe("asset_gen");
+  });
+  it("permits explicitly fictional events without fake evidence but still validates real claims", () => {
+    const c = checkpoint(); c.input.writingMode = "fiction";
+    const raw = { ...review(), facts: [] };
+    expect(validateReview(raw, core, c).passed).toBe(true);
+    raw.checks.factual_accuracy = false;
+    expect(validateReview(raw, core, c).passed).toBe(false);
+  });
   it("accepts fulfilled Avoid requirements instead of falsely revising a supported draft", () => {
     const c = checkpoint(); c.input.excludeIdeas = "Do not discuss the vendor itself.";
     const raw = review();
