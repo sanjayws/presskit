@@ -31,7 +31,7 @@ afterEach(() => { try { fetchMock.assertNoPendingInterceptors(); } finally { fet
 describe("inline illustrations", () => {
   it("plans, renders once, inserts in the chosen paragraph and exports portable assets", async () => {
     const f = await fixture();
-    reply({ images: [{ afterParagraph: 1, alt: 'An illustration of a team "planning"', sourceQuote: fact, prompt: "A sculptural paper office with people thoughtfully arranging a network map." }] });
+    reply({ images: [{ kind: "png", afterParagraph: 1, alt: 'An illustration of a team "planning"', sourceQuote: fact, prompt: "A sculptural paper office with people thoughtfully arranging a network map." }] });
     expect(await inlineImageStep(env, f.article, f.campaign)).toBe(false);
     fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST" }).reply(200, { data: [{ b64_json: png }] });
     expect(await inlineImageStep(env, f.article, f.campaign)).toBe(false);
@@ -70,7 +70,7 @@ describe("inline illustrations", () => {
     const chat = await fixture("chat", 3);
     expect(await inlineImageStep(env, chat.article, chat.campaign)).toBe(true);
     const f = await fixture();
-    reply({ images: [{ afterParagraph: 1, alt: "A working team", sourceQuote: fact, prompt: "An optimistic miniature office with a team planning a practical pilot project." }] });
+    reply({ images: [{ kind: "png", afterParagraph: 1, alt: "A working team", sourceQuote: fact, prompt: "An optimistic miniature office with a team planning a practical pilot project." }] });
     await inlineImageStep(env, f.article, f.campaign);
     for (let n = 0; n < 3; n++) {
       fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST" }).reply(503, {});

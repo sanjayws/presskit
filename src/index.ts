@@ -216,7 +216,7 @@ app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   c.header("X-Frame-Options", "DENY");
-  c.header("Content-Security-Policy", contentSecurityPolicy(nonce));
+  c.header("Content-Security-Policy", c.res.headers.get("content-type")?.startsWith("image/svg+xml") ? "default-src 'none'; sandbox" : contentSecurityPolicy(nonce));
 });
 
 // Build the sidebar nav (identity + run history) for an authed request.
@@ -879,11 +879,11 @@ app.get("/articles/:id/images", async (c) => {
 
 app.get("/articles/:id/inline-images/:file", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
-  const slot = /^([1-3])\.png$/.exec(c.req.param("file"));
+  const slot = /^([1-3])\.(png|svg)$/.exec(c.req.param("file"));
   if (!article || !slot) return c.notFound();
-  const object = await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1])));
+  const object = await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg"));
   if (!object) return c.notFound();
-  return new Response(object.body, { headers: { "content-type": "image/png", "cache-control": "private, no-store" } });
+  return new Response(object.body, { headers: { "content-type": slot[2] === "svg" ? "image/svg+xml" : "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
 });
 
 app.get("/articles/:id/images/:version/:asset", async (c) => {

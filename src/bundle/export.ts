@@ -1,4 +1,4 @@
-import { exportInlineHtml, loadInline, inlineKey } from "../images/inline";
+import { exportInlineHtml, loadInline, inlineKey, inlineKind } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
  * available featured PNG/creative brief. Nothing leaves the app except by the user's
@@ -104,10 +104,10 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
   const inline = await loadInline(env, article.id);
   for (const [i, slot] of (inline?.slots || []).entries()) {
     if (slot.state !== "ready") continue;
-    const object = await env.ASSETS.get(inlineKey(article.id, i + 1));
-    if (object && object.size <= 6000000) files[`inline-${i + 1}.png`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
+    const object = await env.ASSETS.get(inlineKey(article.id, i + 1, inlineKind(slot)));
+    if (object && object.size <= 6000000) files[`inline-${i + 1}.${inlineKind(slot)}`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
   }
-  if (inline?.slots.length) files["inline-images.txt"] = strToU8("Inline illustrations are included as inline-N.png. Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n");
+  if (inline?.slots.length) files["inline-images.txt"] = strToU8("Inline visuals are included as inline-N.png or inline-N.svg. Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n");
   return zipSync(files, { level: 6 });
 }
 

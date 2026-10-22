@@ -50,7 +50,7 @@ export async function sanitizeHtml(html: string, articleId?: string): Promise<st
         el.removeAndKeepContent(); // unwrap unknown tags, keep their text
         return;
       }
-      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.png`))) { el.remove(); return; }
+      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => ["png", "svg"].some((kind) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.${kind}`)))) { el.remove(); return; }
       if (tag === "figure" && !/^[1-3]$/.test(el.getAttribute("data-presskit-inline") || "")) el.removeAttribute("data-presskit-inline");
       const allow = ATTR_ALLOW[tag] ?? EMPTY;
       const names = Array.from(el.attributes, (a) => a[0] ?? "");
