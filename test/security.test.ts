@@ -78,7 +78,7 @@ describe("security headers + CSP (C-02 defense-in-depth)", () => {
   });
 
   it("caps request bodies before parsing large submissions", async () => {
-    const res = await SELF.fetch("https://x.test/campaigns", { method: "POST", body: "x".repeat(11_000_001) });
+    const res = await SELF.fetch("https://x.test/campaigns", { method: "POST", body: "x".repeat(21_000_001) });
     expect(res.status).toBe(413);
   });
   it("sets a nonce CSP and no inline handlers on the dashboard", async () => {

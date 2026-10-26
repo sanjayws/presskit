@@ -6,6 +6,7 @@ import { imageJobPrefix } from "./assets";
 export interface ImageVersion {
   id: string;
   createdAt: string | null;
+  uploaded?: boolean;
 }
 
 /** Version IDs resolve only inside the authenticated article's asset directory. */
@@ -36,14 +37,14 @@ export async function listImageVersions(bucket: R2Bucket, article: Article, job?
   const current = currentImageVersion(article);
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix, cursor });
+    const page = await bucket.list({ prefix, cursor, include: ["customMetadata"] });
     for (const object of page.objects) {
       const path = object.key.slice(prefix.length);
       const id = path === "featured.png" ? "original" : /^image-jobs\/(img_[a-f0-9]{32})\/featured\.png$/.exec(path)?.[1];
       if (!id) continue;
       // A job may have written its PNG but not yet validated/attached it.
       if (id === job?.id && id !== current && (job.state === "queued" || job.state === "working")) continue;
-      versions.push({ id, createdAt: object.uploaded.toISOString() });
+      versions.push({ id, createdAt: object.uploaded.toISOString(), ...(object.customMetadata?.source === "upload" ? { uploaded: true } : {}) });
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);

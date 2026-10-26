@@ -1,4 +1,6 @@
 import { inlineImageStep } from "../images/inline";
+import { runImages } from "../images/uploads";
+import { uploadedImageStep } from "../images/uploaded-inline";
 import { creativeContextStep } from "../grounding/creative";
 import { acceptedGapsGuidance } from "../editorial/accepted-gaps";
 import { selectedChannels } from "../style/channels";
@@ -353,6 +355,14 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
       if (article.png_r2_key || (await imageJobs.get(env.DB, article.id))?.state === "failed") continue;
       const pngKey = `articles/${article.id}/featured.png`;
       try {
+        const uploadedHero = runImages(run).find((image) => image.role === "hero");
+        if (uploadedHero) {
+          const image = await env.ASSETS.get(uploadedHero.r2_key);
+          if (!image) throw new Error("The saved hero upload is unavailable.");
+          await env.ASSETS.put(pngKey, image.body, { httpMetadata: { contentType: uploadedHero.content_type }, customMetadata: { source: "upload", width: String(uploadedHero.width), height: String(uploadedHero.height) } });
+          await articlesRepo.update(env.DB, article.id, { png_r2_key: pngKey });
+          continue; // original bytes, no paid image planning or rendering
+        }
         const key = await renderFeaturedVisual(env, article, campaign, {
           pngKey, briefKey: `articles/${article.id}/image-brief.json`,
         });
@@ -375,6 +385,14 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
 
     for (const article of await articlesRepo.listForRun(env.DB, runId)) {
       if (!await inlineImageStep(env, article, campaign)) {
+        await runs.releaseStage(env.DB, runId, lease);
+        await enqueue(env, { runId, stage: "image" });
+        return;
+      }
+    }
+
+    for (const article of await articlesRepo.listForRun(env.DB, runId)) {
+      if (!await uploadedImageStep(env, article, run)) {
         await runs.releaseStage(env.DB, runId, lease);
         await enqueue(env, { runId, stage: "image" });
         return;

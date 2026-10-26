@@ -8,6 +8,7 @@ A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build w
 - **Auto decide** reads your brief, source pages, uploaded/saved documents and existing inputs in background, then fills suggested channels, writing mode, tone, length, creativity and visual settings. Highlighted suggestions require your review and submission; generation never starts automatically. Up to two active jobs and ten requests per hour per account; job requests, uploads and results expire after 24 hours.
 - **Storytelling** builds a narrative with supported real situations or clearly illustrative scenarios. **Fictional story** creates labelled invented characters and events; pure fiction needs no sources, while real-world product/legal claims still do. Constructive framing, richer workplace scenarios and creative prose apply throughout, while retaining accurate material caveats.
 - **Inline illustrations** optionally add 1–3 generated images beside relevant paragraphs in WordPress, email, Word and Markdown outputs, in addition to the hero. Social/chat keep the hero only. The AI chooses native SVG for appropriate process diagrams, timelines and concept cards in WordPress/Markdown, and PNG for illustrative scenes. SVG labels are checked against exact article passages, and application code builds the SVG from a restricted diagram specification. Email and Word use PNG for compatibility. One visual is generated per background step; SVGs use a text-model call instead of an OpenAI image call. ZIPs include the actual PNG/SVG files and local image paths; standalone downloads embed the selected assets. Clipboard images and embedded data URLs depend on the destination: upload ZIP images to your publishing/email platform and replace paths when needed. Failed inline images preserve the draft and other images. The writing mode and image-generation options are saved on each run; later brief edits apply to new runs.
+- **Your images:** upload screenshots, photos or other PNG/JPEG/still WebP visuals. Choose one as the hero (skips paid hero generation), place others inside WordPress/HTML, Markdown, email or Word articles, or keep them as download-only attachments. Add descriptions for useful alt text and placement. Uploaded originals remain private, keep their original bytes/aspect ratio, stay visible when editing a brief, and are included in exports. Each run freezes its selection and descriptions; deselecting images for a new run preserves older articles. AI placement uses descriptions and paragraphs, not image pixels, with up to three checkpointed attempts and a deterministic fallback. Generated illustrations are optional additions. See [image upload limits and workflow](#using-your-own-images).
 - Runs in background queues with saved checkpoints and recovery.
 - Select up to four destinations per run, such as WordPress + WhatsApp. Research is shared; each channel gets separate writing checkpoints, a draft, review, channel-sized visual and exports. Additional channels cost additional AI usage. Add channel-specific instructions to the brief; confirm destinations when choosing the angle. Existing single-channel runs remain supported.
 - Generates channel-sized images and keeps previous versions. Planning and rendering prompts reserve crop-safe background: 20% at the top/bottom for landscape images, 30% for square images, and 10% at either side. Important subjects and text stay in the central area; verify the actual destination preview because image-model adherence and platform crops vary.
@@ -69,7 +70,7 @@ npx wrangler secret put OPENAI_API_KEY
 npx wrangler d1 migrations apply blog_studio --remote
 ```
 
-If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql`, `0020_multiple_channels.sql` and `0021_creative_generation.sql`. When upgrading an existing installation, apply migrations before deploying the new Worker. Never insert plaintext passwords into D1 or configuration files.
+If Wrangler asks to create the Worker during the first secret upload, accept. Use your chosen database name if you changed it. Apply **all** migrations, including `0019_password_login.sql`, `0020_multiple_channels.sql`, `0021_creative_generation.sql` and `0022_uploaded_images.sql`. When upgrading an existing installation, apply migrations before deploying the new Worker. Never insert plaintext passwords into D1 or configuration files.
 
 ### 5. Create a login
 
@@ -127,7 +128,11 @@ The supplied configuration retains these model choices: Anthropic `claude-opus-5
 
 | Input | Limit |
 |---|---|
-| New upload | One file per submission, at most 10,000,000 bytes |
+| Supporting document upload | One new document per submission, at most 10,000,000 bytes |
+| Own images | Up to 6 selected files including saved images; PNG, JPEG or still WebP |
+| Own image size | At most 3,000,000 bytes each; at most 10,000,000 bytes combined |
+| Own image dimensions | At most 8,192 pixels per side and 24 megapixels |
+| Image description / alt text | 1–240 characters; new files default to their filename when omitted |
 | Extracted document text | 40–60,000 characters; no fixed page limit |
 | Source URLs field | 10 URLs, 4,096 characters each; optional writing research can add up to two more extracted public sources |
 | Brief | 12,000 characters |
@@ -136,6 +141,16 @@ The supplied configuration retains these model choices: Anthropic `claude-opus-5
 | Output | Up to 2,000 words, with shorter channel-specific limits |
 
 Uploads support PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, HTML and Markdown. Saved files stay attached when editing. File size/type, brief limits and readable text limits are checked before queueing where possible; PDF/Office content limits are checked during extraction before readiness. PDF extraction can itself use an AI request. Excerpt selection can miss supporting details. Review generated facts and images before publication.
+
+## Using your own images
+
+1. Open **Your images** in the brief. Select an image, choose **Hero image**, **Inside article** or **Download only**, and describe what it shows. Use **Add another image** for more files.
+2. Choose at most one uploaded hero. With no uploaded hero, Presskit generates one. **Generated inline illustrations → No additional AI images** keeps only your uploads and the hero; choose 1–3 to add AI illustrations.
+3. Submit the brief and choose your angle/channels. Placement runs in the background after editorial review; descriptions guide the matching. Original screenshot pixels are never altered or sent to the placement model. Screenshots are visual assets, not extracted factual sources: supply readable supporting text for factual claims.
+4. Review the draft and **Your uploaded images** gallery. Download originals individually, or use **Download all** for the article, image files and `uploaded-images.json` descriptions/roles. LinkedIn, social/chat and plain text keep uploads as separate attachments. Inside-article files are embedded in standalone downloads and referenced by local filenames in ZIPs. Clipboard/data-URL support varies; upload the files to your destination media library and replace paths where needed.
+5. When editing the brief, keep the checked saved images or deselect them for the next run. Older runs keep their own image selection and descriptions. Deleting a brief or its final history item schedules removal of its private uploads.
+
+Browser count/size/type checks run before submission, and the server validates the selection, headers and dimensions before queueing AI work (including Auto decide). Email/Word hero and inline visuals require PNG/JPEG; WebP can stay as a download-only attachment. This compatibility check applies both to brief submission and channel selection. SVG, GIF/APNG, animated WebP and HEIC uploads are not supported; export a still PNG/JPEG/WebP copy. Original files are not resized, cropped, stripped of metadata or redacted. Remove confidential details yourself and check each destination's crop and file requirements; uploaded heroes do not receive generated crop-safe padding. Inline display dimensions preserve aspect ratio and fit article/email widths. No additional Cloudflare binding or API key is needed beyond migration `0022_uploaded_images.sql`.
 
 ## SEO guidance and publishing
 

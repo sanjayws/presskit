@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, fetchMock, SELF } from "cloudflare:test";
 import { articles, campaigns, runs, users } from "../src/db/repos";
 import { imageJobs } from "../src/db/image-jobs";
+import { cleanDeletedAssets } from "../src/db/history";
 import { articleImageBriefKey, imageJobPrefix } from "../src/images/assets";
 import { imageFailureMessage } from "../src/images/errors";
 import { renderFeaturedVisual } from "../src/images/render";
@@ -106,7 +107,7 @@ describe("image-only routes and cost guardrails", () => {
     await articles.update(env.DB, article.id, { png_r2_key: `articles/${article.id}/featured.png` });
     page = await (await SELF.fetch(`https://x.test/runs/${run.id}`)).text();
     expect(page).toContain('<details class="fold" open><summary>Featured visual');
-    expect(page).toContain(`href="/articles/${article.id}/images/original/featured.png" download title="Download the full-resolution featured visual as a PNG">Download Image</a>`);
+    expect(page).toContain(`href="/articles/${article.id}/images/original/featured.png" download title="Download the original full-resolution visual">Download Image</a>`);
   });
   it("makes queue-send failures retryable from the UI instead of leaving a stuck pending job", async () => {
     const { article } = await fixture();
@@ -232,6 +233,10 @@ describe("image-only generation and recovery", () => {
     const response = await SELF.fetch(`https://x.test/campaigns/${campaign.id}/delete`, { method: "POST", redirect: "manual" });
     expect(response.status).toBe(302);
     expect(await imageJobs.get(env.DB, article.id)).toBeNull();
+    expect((await SELF.fetch(`https://x.test/articles/${article.id}/images/${job.id}/featured.png`)).status).toBe(404);
+    // Files become inaccessible immediately; durable cleanup runs after its safety delay.
+    await env.DB.prepare("UPDATE asset_cleanup SET due_at=-1 WHERE prefix=?").bind(`articles/${article.id}/`).run();
+    await cleanDeletedAssets(env);
     expect(await env.ASSETS.get(`${prefix}/image-brief.json`)).toBeNull();
     expect(await env.ASSETS.get(`${prefix}/featured.png`)).toBeNull();
     expect(await env.ASSETS.get(`articles/${article.id}/featured.png`)).toBeNull();

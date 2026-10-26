@@ -11,6 +11,7 @@ import { toPlain, renderOutput, isRichFormat } from "../content/render";
 import { isOutputFormat } from "../style/engine";
 import { imageCropSafety } from "./brief";
 import { RetryableError, isTransientFailure } from "../errors";
+import { stripUploadedImages, exportUploadedHtml } from "./uploads";
 
 export type InlineKind = "png" | "svg";
 export interface InlineSlot { kind?: InlineKind; width?: number; height?: number; sourceText?: string; diagram?: SvgDiagram; afterParagraph: number; alt: string; prompt: string; state: "pending" | "ready" | "failed"; attempts: number }
@@ -47,7 +48,7 @@ export async function insertInline(html: string, id: string, slots: InlineSlot[]
 export async function inlineImageStep(env: Env, article: Article, campaign: Campaign | null): Promise<boolean> {
   const count = Math.min(3, Math.max(0, campaign?.inline_image_count || 0));
   if (!count || !supportsInline(article.output_format)) return true;
-  const base = stripInline(article.body_html);
+  const base = stripUploadedImages(stripInline(article.body_html));
   const hash = await sha256Hex(base);
   let manifest = await loadInline(env, article.id);
   if (manifest && manifest.baseHash !== hash) return true; // preserve manual edits; never silently regenerate
@@ -123,7 +124,7 @@ export async function inlineImageStep(env: Env, article: Article, campaign: Camp
 
 /** Rewrite only this article's owned asset URLs; ZIPs use local files, HTML downloads embed the owned PNG/SVG assets. */
 export async function exportInlineHtml(env: Env, article: Article, localFiles = false): Promise<string> {
-  let body = article.body_html;
+  let body = await exportUploadedHtml(env, article, localFiles);
   const manifest = await loadInline(env, article.id);
   for (const [index, slot] of (manifest?.slots || []).entries()) {
     if (slot.state !== "ready") continue;

@@ -1,4 +1,5 @@
 import { articleSchemaStarter, seoDraftReview } from "./seo/review";
+import { campaignImages, validateImageSelection, saveImageSelection, ImageUploadError, runImages, IMAGE_ID, imageExtension, uploadedChannelError } from "./images/uploads";
 import { optionJobKey, optionResultKey, recoverOptionJobs, type OptionRequest } from "./editorial/auto-decide";
 import { exportInlineHtml, inlineKey, loadInline } from "./images/inline";
 import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
@@ -31,7 +32,6 @@ import {
   runs,
   topics,
   articles,
-  groundingDocs,
   type User,
 } from "./db/repos";
 import { validateGroundingUrl, uploadText } from "./grounding/ingest";
@@ -45,13 +45,13 @@ import { CTAS, CTA_ACTIONS, PERSONAS, TONES, IMAGE_STYLES, isOutputFormat, isArt
 import { renderOutput, isRichFormat } from "./content/render";
 import { imageJobs } from "./db/image-jobs";
 import { articleImageBriefKey, imageJobPrefix } from "./images/assets";
-import { loadEditorial, editorialKey, channelIssues, type EditorialCheckpoint } from "./editorial/review";
-import { loadSourceReport, sourceReportKey, sourceFailureGuidance } from "./grounding/report";
+import { loadEditorial, channelIssues, type EditorialCheckpoint } from "./editorial/review";
+import { loadSourceReport, sourceFailureGuidance } from "./grounding/report";
 import { imageStatus, imageVersionKey, listImageVersions } from "./images/history";
-import { saveSourceUpload, sourceUploads, savedSourceDocuments } from "./grounding/uploads";
+import { saveSourceUpload, savedSourceDocuments } from "./grounding/uploads";
 import { MAX_SOURCE_BYTES, SOURCE_EXTENSIONS } from "./grounding/documents";
 import { getRecovery, recoverStalledRuns, resumeSavedRun } from "./pipeline/recovery";
-import { loadReadiness, readinessKey } from "./grounding/readiness";
+import { loadReadiness } from "./grounding/readiness";
 import { acceptSavedDraft, recheckSavedDraft } from "./pipeline/editorial";
 import { listHistory, changeHistory, cleanDeletedAssets, HistoryError, type HistoryFilter } from "./db/history";
 
@@ -75,7 +75,7 @@ import { historyScreen } from "./ui/history";
 type Vars = { user: User; nonce: string };
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 app.use("/auth/password", bodyLimit({ maxSize: 4096, onError: (c) => c.text("Login submission too large.", 413) }));
-app.use("*", bodyLimit({ maxSize: 11_000_000, onError: (c) => c.text("This submission is too large. Use a document of up to 10 MB.", 413) }));
+app.use("*", bodyLimit({ maxSize: 21_000_000, onError: (c) => c.text("This submission is too large. Documents allow 10 MB; images allow 3 MB each and 10 MB combined, up to 6 images.", 413) }));
 
 function contentSecurityPolicy(nonce: string): string {
   return [
@@ -319,7 +319,7 @@ function parseCampaignFields(form: FormData): CampaignFields {
       .map((s) => s.trim())
     .filter(Boolean),
     upload: upload != null && typeof upload !== "string" && upload.size > 0 ? upload : null,
-    voice_profile: fstr(form, "voice_profile", "ms-en"),
+    voice_profile: fstr(form, "voice_profile", "ms-en").slice(0, 40),
     max_words: Math.max(200, Math.min(2000, Number(form.get("max_words")) || 2000)),
     image_brief: fstr(form, "image_brief").trim().slice(0, 1000),
     persona: allowedValue(PERSONAS, fstr(form, "persona").slice(0, 40)),
@@ -416,6 +416,11 @@ app.post("/brief/auto-decide", async (c) => {
   if (bad) return bad;
   const campaignId = fstr(form, "campaign_id");
   if (campaignId && (await campaigns.get(c.env.DB, campaignId))?.user_id !== user.id) return c.notFound();
+  let images;
+  try { images = await validateImageSelection(form, campaignId ? await campaignImages(c.env.DB, campaignId) : []); }
+  catch (error) { if (error instanceof ImageUploadError) return c.text(error.message, 400); throw error; }
+  const imageError = uploadedChannelError([...images.saved, ...images.added.map((item) => item.image)], f.output_formats);
+  if (imageError) return c.text(imageError, 400);
   const bytes = f.upload ? new Uint8Array(await f.upload.arrayBuffer()) : null;
   if (f.upload && bytes) {
     if (/\.pdf$/i.test(f.upload.name) && new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") return c.text("This PDF has an invalid file header. Export a new copy.", 400);
@@ -429,8 +434,10 @@ app.post("/brief/auto-decide", async (c) => {
     AND (SELECT COUNT(*) FROM brief_option_jobs WHERE user_id=? AND created_at>?)<10`)
     .bind(id, user.id, Date.now(), user.id, Date.now() - 86400000, user.id, Date.now() - 3600000).run();
   if (!inserted.meta.changes) return c.text("Auto decide allows two background jobs at a time and ten requests per hour. Wait for a current job or select settings manually.", 429);
-  const fields = Object.fromEntries([...form.entries()].filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  // Only validated brief fields reach the model; ignore arbitrary multipart fields.
+  const fields = Object.fromEntries(Object.entries(f).filter(([key, value]) => key !== "upload" && (typeof value === "string" || typeof value === "number")).map(([key, value]) => [key, String(value)]));
   fields.output_formats = JSON.stringify(f.output_formats);
+  fields.uploaded_image_descriptions = JSON.stringify([...images.saved, ...images.added.map((item) => item.image)].map(({ description, role }) => ({ description, role })));
   const request: OptionRequest = { fields, urls: f.urls, text: "", read: 0, uploadDone: !bytes, warnings: [], ...(campaignId ? { campaignId } : {}) };
   try {
     if (bytes && f.upload) {
@@ -458,9 +465,15 @@ app.get("/brief/auto-decide/:id", async (c) => {
 // --- create campaign + start a run -----------------------------------------
 app.post("/campaigns", async (c) => {
   const user = c.get("user");
-  const f = parseCampaignFields(await c.req.formData());
+  const form = await c.req.formData();
+  const f = parseCampaignFields(form);
   const bad = await validateSubmission(c, user.id, f);
   if (bad) return bad;
+  let images;
+  try { images = await validateImageSelection(form); }
+  catch (error) { if (error instanceof ImageUploadError) return c.text(error.message, 400); throw error; }
+  const imageError = uploadedChannelError([...images.saved, ...images.added.map((item) => item.image)], f.output_formats);
+  if (imageError) return c.text(imageError, 400);
 
   const campaign = await campaigns.create(c.env.DB, {
     user_id: user.id,
@@ -496,6 +509,12 @@ app.post("/campaigns", async (c) => {
     }
   }
 
+  try { await saveImageSelection(c.env, campaign.id, images); }
+  catch {
+    await campaigns.remove(c.env.DB, campaign.id, [`grounding/${campaign.id}/`]);
+    return c.text("Could not save your images. Your files are still selected in this form; try submitting again.", 503);
+  }
+
   const run = await runs.create(c.env.DB, campaign.id);
   await startRun(c.env, run.id);
   return c.redirect(`/runs/${run.id}`);
@@ -507,7 +526,15 @@ app.get("/campaigns/:id/edit", async (c) => {
   const campaign = await campaigns.get(c.env.DB, c.req.param("id"));
   if (!campaign || campaign.user_id !== user.id) return c.notFound();
   const nav = await buildNav(c, user);
-  return c.html(editCampaign(nav, campaign, await savedSourceDocuments(c.env, campaign.id)));
+  return c.html(editCampaign(nav, campaign, await savedSourceDocuments(c.env, campaign.id), await campaignImages(c.env.DB, campaign.id)));
+});
+
+app.get("/campaigns/:id/images/:imageId", async (c) => {
+  const campaign = await campaigns.get(c.env.DB, c.req.param("id"));
+  if (!campaign || campaign.user_id !== c.get("user").id) return c.notFound();
+  const image = (await campaignImages(c.env.DB, campaign.id)).find((item) => item.id === c.req.param("imageId"));
+  if (!image) return c.notFound();
+  return serveR2(c.env, image.r2_key, image.content_type, `image.${imageExtension(image.content_type)}`);
 });
 
 // --- update campaign + regenerate (replaces current) -----------------------
@@ -516,9 +543,15 @@ app.post("/campaigns/:id", async (c) => {
   const campaign = await campaigns.get(c.env.DB, c.req.param("id"));
   if (!campaign || campaign.user_id !== user.id) return c.notFound();
 
-  const f = parseCampaignFields(await c.req.formData());
+  const form = await c.req.formData();
+  const f = parseCampaignFields(form);
   const bad = await validateSubmission(c, user.id, f, (await savedSourceDocuments(c.env, campaign.id)).filter((doc) => doc.status === "loaded" || doc.status === "pending").length);
   if (bad) return bad;
+  let images;
+  try { images = await validateImageSelection(form, await campaignImages(c.env.DB, campaign.id)); }
+  catch (error) { if (error instanceof ImageUploadError) return c.text(error.message, 400); throw error; }
+  const imageError = uploadedChannelError([...images.saved, ...images.added.map((item) => item.image)], f.output_formats);
+  if (imageError) return c.text(imageError, 400);
 
   if (f.upload) {
     try { await saveSourceUpload(c.env, campaign.id, f.upload); }
@@ -526,6 +559,9 @@ app.post("/campaigns/:id", async (c) => {
       return c.text(`Supporting document: ${sourceFailureGuidance(error)}`, 400);
     }
   }
+
+  try { await saveImageSelection(c.env, campaign.id, images); }
+  catch { return c.text("Could not save your images. Your brief is kept; try submitting again.", 503); }
 
   await campaigns.update(c.env.DB, campaign.id, {
     idea: f.idea,
@@ -563,36 +599,15 @@ app.post("/campaigns/:id/delete", async (c) => {
   const campaign = await campaigns.get(c.env.DB, c.req.param("id"));
   if (!campaign || campaign.user_id !== user.id) return c.notFound();
 
-  // Best-effort R2 cleanup: grounding docs + article assets, in parallel.
-  try {
-    const keys: string[] = [];
-    const docs = await groundingDocs.listForCampaign(c.env.DB, campaign.id);
-    for (const d of docs) keys.push(d.r2_key);
-    for (const upload of await sourceUploads(c.env, campaign.id)) keys.push(upload.r2_key);
-    const campaignRuns = await runs.listForCampaign(c.env.DB, campaign.id);
-    for (const r of campaignRuns) {
-      keys.push(sourceReportKey(r.id));
-      keys.push(readinessKey(r.id));
-      const arts = await articles.listForRun(c.env.DB, r.id);
-      for (const a of arts) {
-        if (a.png_r2_key) keys.push(a.png_r2_key);
-        if (a.bundle_r2_key) keys.push(a.bundle_r2_key);
-        keys.push(editorialKey(a.id), `articles/${a.id}/featured.png`, `articles/${a.id}/image-brief.json`);
-        // Includes failed/superseded image-only jobs, not just the active PNG.
-        let cursor: string | undefined;
-        do {
-          const assets = await c.env.ASSETS.list({ prefix: `articles/${a.id}/image-jobs/`, cursor });
-          if (assets.objects.length) await c.env.ASSETS.delete(assets.objects.map((object) => object.key));
-          cursor = assets.truncated ? assets.cursor : undefined;
-        } while (cursor);
-      }
-    }
-    if (keys.length) await c.env.ASSETS.delete(keys); // R2 supports bulk delete
-  } catch (e) {
-    console.error(`R2 cleanup failed for ${campaign.id}: ${String(e)}`);
+  // Durable prefix cleanup includes inactive uploads retained for older runs.
+  const prefixes = [`grounding/${campaign.id}/`];
+  for (const run of await runs.listForCampaign(c.env.DB, campaign.id)) {
+    prefixes.push(`runs/${run.id}/`);
+    for (const article of await articles.listForRun(c.env.DB, run.id)) prefixes.push(`articles/${article.id}/`);
   }
-
-  await campaigns.remove(c.env.DB, campaign.id);
+  // Commit cleanup intents and deletion together. Storage failures retry in cron,
+  // and a failed DB deletion cannot schedule deletion of a still-live brief's files.
+  await campaigns.remove(c.env.DB, campaign.id, prefixes);
   return c.redirect("/");
 });
 
@@ -727,6 +742,8 @@ app.post("/runs/:id/select", async (c) => {
   if (!campaign) return c.notFound();
   const budgetError = channelBudgetError(campaign, formats);
   if (budgetError) return c.text(budgetError, 400);
+  const imageError = uploadedChannelError(runImages(run), formats);
+  if (imageError) return c.text(imageError, 400);
   const fmt = fstr(form, "output_format");
   const outputFormat: OutputFormat = isOutputFormat(fmt) ? fmt : "html";
 
@@ -808,6 +825,7 @@ async function serveR2(
   if (!obj) return new Response("Not found", { status: 404 });
   // Prefer the stored content type (the image model may return png or jpeg).
   const ct = obj.httpMetadata?.contentType || contentType;
+  if (["image/png", "image/jpeg", "image/webp"].includes(ct)) filename = filename.replace(/\.(png|jpg|jpeg|webp)$/i, `.${imageExtension(ct)}`);
   return new Response(obj.body, {
     headers: {
       "content-type": ct,
@@ -893,6 +911,14 @@ app.get("/articles/:id/inline-images/:file", async (c) => {
   const object = await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg"));
   if (!object) return c.notFound();
   return new Response(object.body, { headers: { "content-type": slot[2] === "svg" ? "image/svg+xml" : "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
+});
+
+app.get("/articles/:id/uploaded-images/:imageId", async (c) => {
+  const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
+  if (!article || !IMAGE_ID.test(c.req.param("imageId"))) return c.notFound();
+  const image = runImages(await runs.get(c.env.DB, article.run_id)).find((item) => item.id === c.req.param("imageId"));
+  if (!image) return c.notFound();
+  return serveR2(c.env, image.r2_key, image.content_type, `uploaded-image.${imageExtension(image.content_type)}`);
 });
 
 app.get("/articles/:id/images/:version/:asset", async (c) => {
@@ -1002,7 +1028,8 @@ app.post("/articles/:id", async (c) => {
 
   // Body: re-run the exact same allowlist sanitizer + dash strip as generation.
   const bodyIn = typeof payload.body_html === "string" ? payload.body_html : a.body_html;
-  const body_html = stripDashes(await sanitizeHtml(bodyIn, a.id));
+  const uploadedIds = runImages(await runs.get(c.env.DB, a.run_id)).map((image) => image.id);
+  const body_html = stripDashes(await sanitizeHtml(bodyIn, a.id, uploadedIds));
   const title = stripDashes(plainText(payload.title, a.title)).slice(0, 200).trim();
   const meta_desc = stripDashes(plainText(payload.meta_desc, a.meta_desc)).slice(0, 160).trim();
   const excerpt = stripDashes(plainText(payload.excerpt, a.excerpt)).slice(0, 400).trim();

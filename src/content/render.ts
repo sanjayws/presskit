@@ -20,7 +20,7 @@ type ElNode = { type: "el"; tag: string; attrs: Record<string, string>; children
 type TextNode = { type: "text"; text: string };
 type Node = ElNode | TextNode;
 
-const VOID_TAGS = new Set(["br"]);
+const VOID_TAGS = new Set(["br", "img"]);
 
 function decodeEntities(s: string): string {
   return s
@@ -331,7 +331,8 @@ export function toChat(html: string): string {
 /** Standalone, single-column email. Images are uploaded in the sender's editor. */
 export function toEmail(html: string, subject: string, preheader = ""): string {
   const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const body = html.replace(/<(p|h2|h3|ul|ol|blockquote)(\s[^>]*)?>/g, (_tag, tag: string) => `<${tag} style="margin:0 0 16px;line-height:1.6;${tag.startsWith("h") ? "font-size:20px;" : ""}">`);
+  const body = html.replace(/<(p|h2|h3|ul|ol|blockquote|figure)(\s[^>]*)?>/g, (_tag, tag: string) => `<${tag} style="margin:0 0 16px;line-height:1.6;${tag.startsWith("h") ? "font-size:20px;" : ""}">`)
+    .replace(/<img\b/g, '<img style="display:block;max-width:100%;height:auto"');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(subject)}</title></head><body style="margin:0;background:#ffffff;color:#172b36;font-family:Arial,sans-serif;font-size:16px"><div style="display:none;max-height:0;overflow:hidden;mso-hide:all">${escape(preheader)}</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px"><tr><td style="padding:24px">${body}</td></tr></table></td></tr></table></body></html>`;
 }
 

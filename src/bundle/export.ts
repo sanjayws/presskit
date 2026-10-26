@@ -1,5 +1,6 @@
 import { articleSchemaStarter, seoDraftReview } from "../seo/review";
 import { runs } from "../db/repos";
+import { imageExtension, runImages, uploadedImageFile, MAX_IMAGE_BYTES } from "../images/uploads";
 import { exportInlineHtml, loadInline, inlineKey, inlineKind } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
@@ -13,7 +14,7 @@ import { isOutputFormat } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
 
-export const BUNDLE_VERSION = "seo-2026-10-26.1";
+export const BUNDLE_VERSION = "uploads-2026-10-26.1";
 
 export interface BundleMeta {
   title: string;
@@ -35,6 +36,7 @@ export function articleHtmlDocument(article: Article): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(article.title)}</title>
 <meta name="description" content="${escapeHtml(article.meta_desc)}">
+<style>img{max-width:100%;height:auto}figure{margin:1.5em 0}</style>
 </head>
 <body>
 <article>
@@ -100,14 +102,14 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
     files["seo-publishing.txt"] = strToU8(`Optional draft suggestions, not a ranking score or generation gate.\n${seoReview.publishing.join("\n")}\n${schema ? "article-schema.json is an incomplete Article JSON-LD starter. Add only true publishing-site facts (public URL/image, author, publisher and dates) before validation. If the CMS already generates Article schema, configure that instead of creating duplicate/conflicting markup. No FAQ/HowTo rich-result promises, fabricated reviews or ranking guarantees.\n" : ""}`);
   }
   if (format === "email") {
-    files["email-details.txt"] = strToU8(`Subject: ${article.title}\nPreview text: ${article.excerpt}\n\nImport article.html into your email platform. Upload featured.png to its image library and display it up to 600 pixels wide. Add your sender details and platform unsubscribe footer. Send a test email before sending to your audience.\n`);
+    files["email-details.txt"] = strToU8(`Subject: ${article.title}\nPreview text: ${article.excerpt}\n\nImport article.html into your email platform. Upload the featured image and inline image files to its image library and display them up to 600 pixels wide, preserving aspect ratio. Add your sender details and platform unsubscribe footer. Send a test email before sending to your audience.\n`);
     files["email-plain.txt"] = strToU8(renderOutput(article.body_html, "plain", { title: article.title, keyPhrases: phrases }).body);
   }
   if (format === "linkedin") files["linkedin-rich.html"] = strToU8(article.body_html);
 
   if (article.png_r2_key) {
     const png = await env.ASSETS.get(article.png_r2_key);
-    if (png) files["featured.png"] = new Uint8Array(await png.arrayBuffer());
+    if (png) files[`featured.${imageExtension(png.httpMetadata?.contentType || "image/png")}`] = [new Uint8Array(await png.arrayBuffer()), { level: 0 }];
   }
   const brief = await env.ASSETS.get(articleImageBriefKey(article));
   if (brief && brief.size <= 32_000) {
@@ -121,6 +123,16 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
     if (object && object.size <= 6000000) files[`inline-${i + 1}.${inlineKind(slot)}`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
   }
   if (inline?.slots.length) files["inline-images.txt"] = strToU8("Inline visuals are included as inline-N.png or inline-N.svg. Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n");
+  const uploads = runImages(run);
+  if (uploads.length) {
+    for (const image of uploads) {
+      const object = await env.ASSETS.get(image.r2_key);
+      if (!object || object.size > MAX_IMAGE_BYTES) throw new Error("An uploaded image is unavailable. Try downloading again.");
+      files[uploadedImageFile(image)] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
+    }
+    files["uploaded-images.json"] = strToU8(JSON.stringify(uploads.map((image) => ({ file: uploadedImageFile(image), originalFilename: image.filename, description: image.description, role: image.role, width: image.width, height: image.height, contentType: image.content_type })), null, 2));
+    files["uploaded-images.txt"] = strToU8("Your original uploaded images are included with descriptions and intended roles in uploaded-images.json. Inside-article placement is supported for HTML, Markdown, email and Word; other channels keep separate downloadable attachments. Upload images to the destination media library and replace local paths. Original files are not cropped, resized or redacted; check privacy, permissions and destination previews before publishing. Descriptions guide placement and alt text, not factual verification.\n");
+  }
   return zipSync(files, { level: 6 });
 }
 

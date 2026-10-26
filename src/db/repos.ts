@@ -1,6 +1,7 @@
 /** Typed repositories, one per table. Thin CRUD over D1. */
 import type { D1Database } from "@cloudflare/workers-types";
 import { all, exec, execChanges, newId, now, one } from "./client";
+import { campaignImages } from "../images/uploads";
 
 // Explicit allowlists of columns a dynamic UPDATE may touch (never derive column
 // identifiers from arbitrary object keys).
@@ -88,6 +89,7 @@ export interface Run {
   inline_image_count?: number;
   generation_version?: number;
   writing_mode?: string;
+  uploaded_images?: string; // immutable private asset + metadata selection
   state: RunState;
   error: string | null;
   created_at: number;
@@ -268,8 +270,9 @@ export const campaigns = {
     return updateAllowed(db, "campaigns", id, fields, CAMPAIGN_UPDATABLE);
   },
   /** Cascade-delete a campaign and everything under it, atomically. */
-  async remove(db: D1Database, id: string) {
+  async remove(db: D1Database, id: string, assetPrefixes: string[] = []) {
     await db.batch([
+      ...assetPrefixes.map((prefix) => db.prepare("INSERT OR IGNORE INTO asset_cleanup(prefix,due_at) VALUES (?,?)").bind(prefix, now() + 300_000)),
       db
         .prepare(
           "DELETE FROM articles WHERE run_id IN (SELECT id FROM runs WHERE campaign_id = ?)",
@@ -354,6 +357,7 @@ export const runs = {
       inline_image_count: campaign?.inline_image_count || 0,
       generation_version: campaign?.generation_version || 1,
       writing_mode: campaign?.article_type || "",
+      uploaded_images: JSON.stringify(await campaignImages(db, campaignId)),
       state: "drafting_topics",
       error: null,
       created_at: now(),
@@ -364,7 +368,7 @@ export const runs = {
     };
     await exec(
       db,
-      "INSERT INTO runs (id, campaign_id, state, created_at, inline_image_count, generation_version, writing_mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO runs (id, campaign_id, state, created_at, inline_image_count, generation_version, writing_mode, uploaded_images) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       r.id,
       r.campaign_id,
       r.state,
@@ -372,6 +376,7 @@ export const runs = {
       r.inline_image_count!,
       r.generation_version!,
       r.writing_mode!,
+      r.uploaded_images!,
     );
     return r;
   },
