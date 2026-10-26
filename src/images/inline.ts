@@ -11,7 +11,7 @@ import { toPlain, renderOutput, isRichFormat } from "../content/render";
 import { isOutputFormat } from "../style/engine";
 import { imageCropSafety } from "./brief";
 import { RetryableError, isTransientFailure } from "../errors";
-import { stripUploadedImages, exportUploadedHtml } from "./uploads";
+import { stripUploadedImages, exportUploadedHtml, MAX_EMBEDDED_IMAGE_BYTES, EmbeddedImageLimitError } from "./uploads";
 
 export type InlineKind = "png" | "svg";
 export interface InlineSlot { kind?: InlineKind; width?: number; height?: number; sourceText?: string; diagram?: SvgDiagram; afterParagraph: number; alt: string; prompt: string; state: "pending" | "ready" | "failed"; attempts: number }
@@ -124,16 +124,20 @@ export async function inlineImageStep(env: Env, article: Article, campaign: Camp
 
 /** Rewrite only this article's owned asset URLs; ZIPs use local files, HTML downloads embed the owned PNG/SVG assets. */
 export async function exportInlineHtml(env: Env, article: Article, localFiles = false): Promise<string> {
-  let body = await exportUploadedHtml(env, article, localFiles);
+  const embeddedBudget = {bytes:0};
+  let body = await exportUploadedHtml(env, article, localFiles,embeddedBudget);
   const manifest = await loadInline(env, article.id);
   for (const [index, slot] of (manifest?.slots || []).entries()) {
     if (slot.state !== "ready") continue;
     const kind = inlineKind(slot);
+    if (!body.includes(inlineUrl(article.id,index+1,kind))) continue;
     const file = `inline-${index + 1}.${kind}`;
     let replacement = file;
     if (!localFiles) {
       const object = await env.ASSETS.get(inlineKey(article.id, index + 1, kind));
       if (!object || object.size > 6000000) continue;
+      embeddedBudget.bytes += object.size;
+      if (embeddedBudget.bytes > MAX_EMBEDDED_IMAGE_BYTES) { await object.body.cancel(); throw new EmbeddedImageLimitError(); }
       const bytes = new Uint8Array(await object.arrayBuffer()); let binary = "";
       for (let p = 0; p < bytes.length; p += 8192) binary += String.fromCharCode(...bytes.subarray(p, p + 8192));
       replacement = `data:${kind === "svg" ? "image/svg+xml" : "image/png"};base64,${btoa(binary)}`;

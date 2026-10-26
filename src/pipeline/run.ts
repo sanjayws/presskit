@@ -1,6 +1,7 @@
 import { inlineImageStep } from "../images/inline";
 import { runImages } from "../images/uploads";
 import { uploadedImageStep } from "../images/uploaded-inline";
+import { readBuildImagesStep, imageNarrativeContext } from "../images/vision";
 import { creativeContextStep } from "../grounding/creative";
 import { acceptedGapsGuidance } from "../editorial/accepted-gaps";
 import { selectedChannels } from "../style/channels";
@@ -100,6 +101,10 @@ export async function stageIngest(env: Env, runId: string): Promise<void> {
     campaign.inline_image_count = run.inline_image_count ?? 0;
     campaign.generation_version = run.generation_version ?? 1;
     campaign.article_type = run.writing_mode || campaign.article_type;
+    if (!await readBuildImagesStep(env, runImages(run))) {
+      await advanceResearch(env, runId, "ingest", "ingest", owner);
+      return;
+    }
     const complete = await ingestSources(env, campaign, runId);
     await advanceResearch(env, runId, "ingest", complete ? "assess" : "ingest", owner);
   } finally { await runs.releaseStage(env.DB, runId, owner); }
@@ -240,7 +245,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
         originalBrief: campaign.idea,
         writingMode: campaign.article_type,
         agentic: campaign.generation_version === 2,
-        creativeContext,
+        creativeContext: [creativeContext, imageNarrativeContext(runImages(run))].filter(Boolean).join("\n"),
         ...(readiness?.acceptance ? { acceptedEvidenceGaps: readiness.gaps.map(({ requirement, missing }) => ({ requirement, missing })) } : {}),
         topicTitle: topic.title,
         angle: topic.angle,

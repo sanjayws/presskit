@@ -6,11 +6,14 @@ import type { Run } from "../db/repos";
 export const MAX_BUILD_IMAGES = 6;
 export const MAX_IMAGE_BYTES = 3_000_000;
 export const MAX_BUILD_IMAGE_BYTES = 10_000_000;
+export const MAX_EMBEDDED_IMAGE_BYTES = 12_000_000;
+export class EmbeddedImageLimitError extends Error { constructor() { super("Inline images exceed the 12 MB embedded-download limit. Use Download all (ZIP), upload its images to your destination media library, and replace the local image paths."); } }
 export const IMAGE_ID = /^upl_[a-f0-9]{32}$/;
 export type UploadRole = "hero" | "inline" | "attachment";
 export interface BuildImage {
   id: string; filename: string; r2_key: string; content_type: string;
   width: number; height: number; bytes: number; description: string; role: UploadRole;
+  tag?: string; use_when?: string; allow_enhance?: number; sha256?: string;
 }
 export interface ImageSelection { saved: BuildImage[]; added: { image: BuildImage; data: Uint8Array }[] }
 export class ImageUploadError extends Error {}
@@ -20,6 +23,10 @@ const roleOf = (value: string): UploadRole => ["hero", "inline", "attachment"].i
 export const imageExtension = (type: string) => type === "image/jpeg" ? "jpg" : type === "image/webp" ? "webp" : "png";
 export const uploadedImageUrl = (articleId: string, imageId: string) => `/articles/${articleId}/uploaded-images/${imageId}`;
 export const uploadedImageFile = (image: BuildImage) => `uploaded-${image.id.slice(4)}.${imageExtension(image.content_type)}`;
+export const imageTag = (image: BuildImage) => image.tag || `image-${image.id.slice(-6)}`;
+export const enhancedImageKey = (articleId: string, image: BuildImage) => image.role === "hero" ? `articles/${articleId}/image-jobs/${image.id.replace(/^upl_/, "img_")}/featured.png` : `articles/${articleId}/uploaded-images/${image.id}-enhanced.png`;
+export const enhancedImageUrl = (articleId: string, image: BuildImage) => `${uploadedImageUrl(articleId,image.id)}/enhanced.png`;
+export const enhancedImageFile = (image: BuildImage) => `uploaded-${image.id.slice(4)}-enhanced.png`;
 export const stripUploadedImages = (html: string) => html.replace(/<figure\b[^>]*data-presskit-upload="upl_[a-f0-9]{32}"[^>]*>[\s\S]*?<\/figure>/gi, "");
 export function uploadedChannelError(images: BuildImage[], formats: string[]): string | null {
   if (formats.some((format) => format === "email" || format === "word") && images.some((image) => image.content_type === "image/webp" && image.role !== "attachment")) {
@@ -89,7 +96,7 @@ export function inspectImage(data: Uint8Array): { content_type: string; width: n
 }
 
 export async function campaignImages(db: D1Database, campaignId: string): Promise<BuildImage[]> {
-  return (await db.prepare("SELECT id,filename,r2_key,content_type,width,height,bytes,description,role FROM campaign_images WHERE campaign_id=? AND active=1 ORDER BY created_at,id").bind(campaignId).all<BuildImage>()).results;
+  return (await db.prepare("SELECT id,filename,r2_key,content_type,width,height,bytes,description,role,tag,use_when,allow_enhance,sha256 FROM campaign_images WHERE campaign_id=? AND active=1 ORDER BY created_at,id").bind(campaignId).all<BuildImage>()).results;
 }
 export function runImages(run: Pick<Run, "uploaded_images"> | null): BuildImage[] {
   const value: unknown = JSON.parse(run?.uploaded_images || "[]");
@@ -105,6 +112,9 @@ export async function validateImageSelection(form: FormData, saved: BuildImage[]
   const selected = saved.filter((image) => !explicit || keep.includes(image.id)).map((image) => ({ ...image,
     role: explicit ? roleOf(field(form, `image_role_${image.id}`)) : image.role,
     description: explicit ? field(form, `image_description_${image.id}`).trim() : image.description,
+    tag: explicit ? field(form, `image_tag_${image.id}`).trim() || imageTag(image) : imageTag(image),
+    use_when: explicit ? field(form, `image_use_when_${image.id}`).trim() : image.use_when || "",
+    allow_enhance: explicit ? Number(form.get(`image_enhance_${image.id}`) === "yes") : image.allow_enhance || 0,
   }));
   const files = Array.from({ length: MAX_BUILD_IMAGES }, (_, i) => ({ file: form.get(`image_${i}`), index: i }))
     .filter((entry): entry is { file: File; index: number } => entry.file !== null && typeof entry.file !== "string" && (entry.file.size > 0 || !!entry.file.name));
@@ -124,11 +134,16 @@ export async function validateImageSelection(form: FormData, saved: BuildImage[]
     const filename = file.name.replace(/[\x00-\x1f\x7f/\\]/g, "_").slice(0, 160);
     const description = field(form, `image_description_${index}`).trim() || filename.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
     const id = `upl_${crypto.randomUUID().replace(/-/g, "")}`;
-    added.push({ image: { id, filename, r2_key: "", ...inspected, bytes: file.size, description, role }, data });
+    const tag = field(form, `image_tag_${index}`).trim() || `image${selected.length + added.length + 1}`;
+    const use_when = field(form, `image_use_when_${index}`).trim();
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", data))].map((byte) => byte.toString(16).padStart(2,"0")).join("");
+    added.push({ image: { id, filename, r2_key: "", ...inspected, bytes: file.size, description, role, tag, use_when, sha256, allow_enhance: Number(form.get(`image_enhance_${index}`) === "yes") }, data });
   }
   const all = [...selected, ...added.map((item) => item.image)];
   if (all.some((image) => !image.description || image.description.length > 240)) fail("Describe each image in 1–240 characters so placement and alt text are useful.");
   if (all.filter((image) => image.role === "hero").length > 1) fail("Choose only one uploaded hero image. Set other images to Inside article or Download only.");
+  if (all.some((image) => !/^[\p{L}\p{N}][\p{L}\p{N} _-]{0,39}$/u.test(imageTag(image)) || (image.use_when || "").length > 240)) fail("Give each image a tag of 1–40 letters/numbers, spaces, underscores or hyphens. Keep its usage instruction to 240 characters.");
+  if (new Set(all.map((image) => imageTag(image).toLowerCase())).size !== all.length) fail("Use a different tag for each selected image so the writer can identify the correct visual.");
   return { saved: selected, added };
 }
 
@@ -142,28 +157,32 @@ export async function saveImageSelection(env: Env, campaignId: string, selection
       await env.ASSETS.put(item.image.r2_key, item.data, { httpMetadata: { contentType: item.image.content_type }, customMetadata: { source: "upload" } });
     }
     const statements = [env.DB.prepare("UPDATE campaign_images SET active=0 WHERE campaign_id=?").bind(campaignId)];
-    for (const image of selection.saved) statements.push(env.DB.prepare("UPDATE campaign_images SET active=1,description=?,role=? WHERE id=? AND campaign_id=?").bind(image.description, image.role, image.id, campaignId));
-    for (const { image } of selection.added) statements.push(env.DB.prepare("INSERT INTO campaign_images (id,campaign_id,filename,r2_key,content_type,width,height,bytes,description,role,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-      .bind(image.id, campaignId, image.filename, image.r2_key, image.content_type, image.width, image.height, image.bytes, image.description, image.role, Date.now()));
+    for (const image of selection.saved) statements.push(env.DB.prepare("UPDATE campaign_images SET active=1,description=?,role=?,tag=?,use_when=?,allow_enhance=? WHERE id=? AND campaign_id=?").bind(image.description, image.role, imageTag(image), image.use_when || "", image.allow_enhance || 0, image.id, campaignId));
+    for (const { image } of selection.added) statements.push(env.DB.prepare("INSERT INTO campaign_images (id,campaign_id,filename,r2_key,content_type,width,height,bytes,description,role,created_at,tag,use_when,allow_enhance,sha256) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(image.id, campaignId, image.filename, image.r2_key, image.content_type, image.width, image.height, image.bytes, image.description, image.role, Date.now(), imageTag(image), image.use_when || "", image.allow_enhance || 0, image.sha256 || ""));
     await env.DB.batch(statements);
   } catch (error) { if (keys.length) await env.ASSETS.delete(keys); throw error; }
 }
 
-export async function exportUploadedHtml(env: Env, article: { id: string; run_id: string; body_html: string }, localFiles = false): Promise<string> {
+export async function exportUploadedHtml(env: Env, article: { id: string; run_id: string; body_html: string }, localFiles = false, embeddedBudget = { bytes: 0 }): Promise<string> {
   const run = await env.DB.prepare("SELECT uploaded_images FROM runs WHERE id=?").bind(article.run_id).first<Pick<Run,"uploaded_images">>();
   let body = article.body_html;
   for (const image of runImages(run)) {
-    const url = uploadedImageUrl(article.id, image.id);
-    if (!body.includes(url)) continue;
-    let replacement = uploadedImageFile(image);
-    if (!localFiles) {
-      const object = await env.ASSETS.get(image.r2_key);
-      if (!object || object.size > MAX_IMAGE_BYTES) throw new Error("A saved image is unavailable. Use the image downloads or try again.");
-      const bytes = new Uint8Array(await object.arrayBuffer()); let binary = "";
-      for (let p = 0; p < bytes.length; p += 8192) binary += String.fromCharCode(...bytes.subarray(p, p + 8192));
-      replacement = `data:${image.content_type};base64,${btoa(binary)}`;
+    for (const enhanced of [true,false]) {
+      const url = enhanced ? enhancedImageUrl(article.id,image) : uploadedImageUrl(article.id, image.id);
+      if (!body.includes(url)) continue;
+      let replacement = enhanced ? enhancedImageFile(image) : uploadedImageFile(image);
+      if (!localFiles) {
+        const object = await env.ASSETS.get(enhanced ? enhancedImageKey(article.id,image) : image.r2_key);
+        if (!object || object.size > (enhanced ? 6000000 : MAX_IMAGE_BYTES)) throw new Error("A saved image is unavailable. Use the image downloads or try again.");
+        embeddedBudget.bytes += object.size;
+        if (embeddedBudget.bytes > MAX_EMBEDDED_IMAGE_BYTES) { await object.body.cancel(); throw new EmbeddedImageLimitError(); }
+        const bytes = new Uint8Array(await object.arrayBuffer()); let binary = "";
+        for (let p = 0; p < bytes.length; p += 8192) binary += String.fromCharCode(...bytes.subarray(p, p + 8192));
+        replacement = `data:${enhanced ? "image/png" : image.content_type};base64,${btoa(binary)}`;
+      }
+      body = body.split(url).join(replacement);
     }
-    body = body.split(url).join(replacement);
   }
   return body;
 }

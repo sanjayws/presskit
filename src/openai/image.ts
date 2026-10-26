@@ -67,3 +67,31 @@ export async function generateImage(env: Env, prompt: string, size: "1536x1024" 
   });
   return { bytes, mimeType: "image/png" };
 }
+
+/** Reference-image editing: always send the real original, never simulate it from a text prompt. */
+export async function enhanceImage(env: Env, source: { data: Uint8Array; contentType: string }, prompt: string, size: "1536x1024" | "1024x1024"): Promise<GeneratedImage> {
+  if (!env.OPENAI_API_KEY) throw new Error("OpenAI image editing is not configured.");
+  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-sunburst";
+  const quality = ["low","medium","high"].includes(env.OPENAI_IMAGE_QUALITY) ? env.OPENAI_IMAGE_QUALITY : "medium";
+  const form = new FormData();
+  form.set("model",model); form.set("n","1"); form.set("prompt",prompt); form.set("size",size); form.set("quality",quality); form.set("output_format","png");
+  const extension=source.contentType==="image/jpeg" ? "jpg" : source.contentType==="image/webp" ? "webp" : "png";
+  form.set("image",new File([source.data],`original-image.${extension}`,{ type: source.contentType }));
+  const started = Date.now();
+  let response: Response;
+  try { response = await fetch("https://api.openai.com/v1/images/edits",{ method:"POST", headers:{ authorization:`Bearer ${env.OPENAI_API_KEY}` }, body:form, signal:AbortSignal.timeout(120000) }); }
+  catch { throw new RetryableError("OpenAI image enhancement timed out; the original is kept."); }
+  if (!response.ok) {
+    await response.body?.cancel();
+    const message = `OpenAI image enhancement failed (${response.status}); the original is kept.`;
+    if (isRetryableStatus(response.status)) throw new RetryableError(message);
+    throw new Error(message);
+  }
+  const value = recordOf(await readJsonBounded(response,8100000));
+  const first = Array.isArray(value.data) ? recordOf(value.data[0]) : {};
+  if (typeof first.b64_json !== "string") throw new Error("OpenAI returned no enhanced image; the original is kept.");
+  const bytes = base64ToBytes(first.b64_json);
+  if (validatedImageMime(bytes) !== "image/png") throw new Error("OpenAI returned an invalid enhanced image; the original is kept.");
+  logEvent("openai.image_edit",{ model, quality, ok:true, bytes:bytes.length, ms:Date.now()-started });
+  return { bytes, mimeType:"image/png" };
+}

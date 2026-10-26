@@ -1,13 +1,16 @@
 import type { Env } from "../env";
 import type { Campaign } from "../db/repos";
-import { campaigns, groundingDocs } from "../db/repos";
+import { campaigns, groundingDocs, runs } from "../db/repos";
+import { loadVisual, visualSources } from "../images/vision";
+import { runImages, imageTag } from "../images/uploads";
+import { sourcePrompt } from "./evidence";
 import { readReferenceLinks } from "../content/enrich";
-import { ingestUrl, loadGroundingEvidence } from "./ingest";
+import { ingestUrl, loadGroundingEvidence, sourceExcerpt } from "./ingest";
 import type { GroundingEvidence } from "./evidence";
 import { RetryableError, isTransientFailure } from "../errors";
 import { extractNextUpload, sourceUploads } from "./uploads";
 
-export interface SourceResult { source: string; status: "loaded" | "unavailable" | "pending"; message: string; docId?: string; attempts?: number }
+export interface SourceResult { source: string; status: "loaded" | "unavailable" | "pending"; message: string; docId?: string; imageId?: string; attempts?: number }
 export const sourceReportKey = (runId: string) => `runs/${runId}/sources.json`;
 export async function loadSourceReport(env: Env, runId: string): Promise<SourceResult[]> {
   const object = await env.ASSETS.get(sourceReportKey(runId));
@@ -64,6 +67,10 @@ export async function ingestSources(env: Env, campaign: Campaign, runId: string)
   for (const upload of await sourceUploads(env, campaign.id)) {
     if (upload.state === "unavailable") results.push({ source: upload.filename, status: "unavailable", message: upload.error || "Document unavailable." });
   }
+  for (const image of runImages(await runs.get(env.DB,runId))) {
+    const visual = await loadVisual(env,image);
+    results.push({ source: `Image ${imageTag(image)} · ${image.filename}`, imageId: image.id, status: visual?.state === "ready" ? "loaded" : visual?.state === "unavailable" ? "unavailable" : "pending", message: visual?.state === "ready" ? "Read original pixels and visible text; supports only observable details, not unseen behaviour or compliance." : visual?.error || "Waiting for visual reading." });
+  }
   await env.ASSETS.put(sourceReportKey(runId), JSON.stringify(results), { httpMetadata: { contentType: "application/json" } });
   if (urls.some((url) => !results.some((result) => result.source === url))) return false;
   // Availability alone is not readiness. The next stage assesses the actual
@@ -77,6 +84,17 @@ export async function groundingForRun(env: Env, campaign: Campaign, runId: strin
 }
 export async function groundingEvidenceForRun(env: Env, campaign: Campaign, runId: string): Promise<GroundingEvidence> {
   const report = await loadSourceReport(env, runId);
+  const run = await runs.get(env.DB,runId);
+  const images = run ? await visualSources(env,run) : [];
+  if (images.length) {
+    const docIds = report.filter((item) => item.status === "loaded" && item.docId).map((item) => item.docId!);
+    const hasDocs = report.length ? docIds.length > 0 : (await groundingDocs.listForCampaign(env.DB,campaign.id)).length > 0;
+    const documentEvidence = hasDocs ? await loadGroundingEvidence(env,campaign.id,{ ...(report.length ? {docIds} : {}), query: `${campaign.idea}\n${campaign.include_ideas}` }) : { sources: [] };
+    const sources = [...documentEvidence.sources,...images];
+    const budget = Math.floor(60000 / sources.length);
+    const bounded = sources.map((source) => ({ ...source, body: sourceExcerpt(source.body,budget,`${campaign.idea}\n${campaign.include_ideas}`) }));
+    return { text: sourcePrompt(bounded), sources: bounded };
+  }
   if (campaign.article_type === "fiction" && !report.some((source) => source.status === "loaded")) return { text: "Fictional narrative: use the brief as creative premises, not verified factual evidence. Do not assert unsupported real-world claims.", sources: [] };
   const docIds = report.length ? report.filter((item) => item.status === "loaded" && item.docId).map((item) => item.docId!) : undefined;
   return loadGroundingEvidence(env, campaign.id, { docIds, query: `${campaign.idea}\n${campaign.include_ideas}` });

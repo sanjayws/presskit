@@ -35,7 +35,7 @@ async function fixture(form = formWithImage()) {
   return { user, campaign, run, article, bindings, images: runImages(run) };
 }
 function reply(placements: unknown) {
-  fetchMock.get("https://api.anthropic.com").intercept({ path: "/v1/messages", method: "POST" }).reply(200, { type: "message", role: "assistant", content: [{ type: "text", text: JSON.stringify({ placements }) }], stop_reason: "end_turn" });
+  fetchMock.get("https://api.anthropic.com").intercept({ path: "/v1/messages", method: "POST" }).reply(200, { type: "message", role: "assistant", content: [{ type: "text", text: JSON.stringify({ placements: (placements as {imageId:string;afterParagraph:number}[]).map((p)=>({...p,enhance:false,enhancementPrompt:""})) }) }], stop_reason: "end_turn" });
 }
 beforeEach(() => { fetchMock.activate(); fetchMock.disableNetConnect(); });
 afterEach(() => { try { fetchMock.assertNoPendingInterceptors(); } finally { fetchMock.deactivate(); } });
@@ -110,12 +110,12 @@ describe("own image validation and saved selections", () => {
     expect(await sanitizeHtml(own, a.article.id, [image.id])).not.toContain("onerror");
     expect(await sanitizeHtml(own.replace(image.id, b.images[0]!.id), a.article.id, [image.id])).not.toContain("data-presskit-upload");
   });
-  it("Auto decide receives descriptions and roles without storing or interpreting image pixels", async () => {
+  it("Auto decide saves selected originals privately for background visual reading", async () => {
     const f = await fixture(); const form = formWithImage("hero", webp, "pilot.webp");
     const response = await worker.fetch(new Request("https://x.test/brief/auto-decide", { method: "POST", body: form }), f.bindings);
     expect(response.status).toBe(202); const { id } = await response.json<{ id: string }>();
     const request = await (await env.ASSETS.get(optionJobKey(id)))!.json<{ fields: Record<string,string>; fileKey?: string }>();
-    expect(JSON.parse(request.fields.uploaded_image_descriptions!)).toEqual([{ description: 'Call routing settings with a "pilot" group', role: "hero" }]);
+    expect(JSON.parse(request.fields.uploaded_image_descriptions!)).toEqual([expect.objectContaining({ description: 'Call routing settings with a "pilot" group', role: "hero" })]);
     expect(request.fileKey).toBeUndefined();
     expect(await campaignImages(env.DB, f.campaign.id)).toHaveLength(1);
   });

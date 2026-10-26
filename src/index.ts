@@ -1,5 +1,7 @@
 import { articleSchemaStarter, seoDraftReview } from "./seo/review";
-import { campaignImages, validateImageSelection, saveImageSelection, ImageUploadError, runImages, IMAGE_ID, imageExtension, uploadedChannelError } from "./images/uploads";
+import { campaignImages, validateImageSelection, saveImageSelection, ImageUploadError, runImages, IMAGE_ID, imageExtension, uploadedChannelError, enhancedImageKey, enhancedImageUrl, uploadedImageUrl, EmbeddedImageLimitError } from "./images/uploads";
+import { loadUploadedPlacements, uploadedPlacementKey } from "./images/uploaded-inline";
+import { loadVisual, visualBody, reuseAutoImageReadings } from "./images/vision";
 import { optionJobKey, optionResultKey, recoverOptionJobs, type OptionRequest } from "./editorial/auto-decide";
 import { exportInlineHtml, inlineKey, loadInline } from "./images/inline";
 import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
@@ -354,6 +356,7 @@ async function validateSubmission(
   f: CampaignFields,
   savedDocumentCount = 0,
   planning = false,
+  imageCount = 0,
 ): Promise<Response | null> {
   if (!Number.isInteger(f.inline_image_count) || f.inline_image_count < 0 || f.inline_image_count > 3) return c.text("Choose 0–3 inline images per supported output.", 400);
   if (f.output_formats.length > MAX_CHANNELS || f.output_formats.some((format) => !isOutputFormat(format))) return c.text(`Choose up to ${MAX_CHANNELS} valid destinations.`, 400);
@@ -371,7 +374,7 @@ async function validateSubmission(
   if (f.urls.length > MAX_URLS) {
     return c.text(`Too many grounding URLs (max ${MAX_URLS}).`, 400);
   }
-  if (!planning && f.article_type !== "fiction" && f.urls.length === 0 && !f.upload && !savedDocumentCount) {
+  if (!planning && f.article_type !== "fiction" && f.urls.length === 0 && !f.upload && !savedDocumentCount && !imageCount) {
     return c.text("Provide at least one source URL or a readable supporting document. Saved files marked unreadable cannot be used.", 400);
   }
   for (const u of f.urls) {
@@ -437,9 +440,14 @@ app.post("/brief/auto-decide", async (c) => {
   // Only validated brief fields reach the model; ignore arbitrary multipart fields.
   const fields = Object.fromEntries(Object.entries(f).filter(([key, value]) => key !== "upload" && (typeof value === "string" || typeof value === "number")).map(([key, value]) => [key, String(value)]));
   fields.output_formats = JSON.stringify(f.output_formats);
-  fields.uploaded_image_descriptions = JSON.stringify([...images.saved, ...images.added.map((item) => item.image)].map(({ description, role }) => ({ description, role })));
-  const request: OptionRequest = { fields, urls: f.urls, text: "", read: 0, uploadDone: !bytes, warnings: [], ...(campaignId ? { campaignId } : {}) };
+  fields.uploaded_image_descriptions = JSON.stringify([...images.saved, ...images.added.map((item) => item.image)].map(({ description, role,tag,use_when }) => ({ description, role,tag,useWhen:use_when || "" })));
+  const request: OptionRequest = { fields, urls: f.urls, images:images.saved.map((image)=>({...image})),text: "", read: 0, uploadDone: !bytes, warnings: [], ...(campaignId ? { campaignId } : {}) };
   try {
+    for (const item of images.added) {
+      const image={...item.image,r2_key:`brief-options/${id}/images/${item.image.id}`};
+      await c.env.ASSETS.put(image.r2_key,item.data,{httpMetadata:{contentType:image.content_type}});
+      request.images!.push(image);
+    }
     if (bytes && f.upload) {
       const extension = f.upload.name.slice(f.upload.name.lastIndexOf("."));
       request.filename = f.upload.name.length > 240 ? f.upload.name.slice(0, 240 - extension.length) + extension : f.upload.name; request.fileKey = `brief-options/${id}/upload`;
@@ -467,13 +475,13 @@ app.post("/campaigns", async (c) => {
   const user = c.get("user");
   const form = await c.req.formData();
   const f = parseCampaignFields(form);
-  const bad = await validateSubmission(c, user.id, f);
-  if (bad) return bad;
   let images;
   try { images = await validateImageSelection(form); }
   catch (error) { if (error instanceof ImageUploadError) return c.text(error.message, 400); throw error; }
   const imageError = uploadedChannelError([...images.saved, ...images.added.map((item) => item.image)], f.output_formats);
   if (imageError) return c.text(imageError, 400);
+  const bad = await validateSubmission(c, user.id, f, 0, false, images.saved.length + images.added.length);
+  if (bad) return bad;
 
   const campaign = await campaigns.create(c.env.DB, {
     user_id: user.id,
@@ -514,6 +522,7 @@ app.post("/campaigns", async (c) => {
     await campaigns.remove(c.env.DB, campaign.id, [`grounding/${campaign.id}/`]);
     return c.text("Could not save your images. Your files are still selected in this form; try submitting again.", 503);
   }
+  await reuseAutoImageReadings(c.env,user.id,fstr(form,"image_reading_job"),images.added.map((item)=>item.image)).catch(()=>undefined);
 
   const run = await runs.create(c.env.DB, campaign.id);
   await startRun(c.env, run.id);
@@ -545,13 +554,13 @@ app.post("/campaigns/:id", async (c) => {
 
   const form = await c.req.formData();
   const f = parseCampaignFields(form);
-  const bad = await validateSubmission(c, user.id, f, (await savedSourceDocuments(c.env, campaign.id)).filter((doc) => doc.status === "loaded" || doc.status === "pending").length);
-  if (bad) return bad;
   let images;
   try { images = await validateImageSelection(form, await campaignImages(c.env.DB, campaign.id)); }
   catch (error) { if (error instanceof ImageUploadError) return c.text(error.message, 400); throw error; }
   const imageError = uploadedChannelError([...images.saved, ...images.added.map((item) => item.image)], f.output_formats);
   if (imageError) return c.text(imageError, 400);
+  const bad = await validateSubmission(c, user.id, f, (await savedSourceDocuments(c.env, campaign.id)).filter((doc) => doc.status === "loaded" || doc.status === "pending").length, false, images.saved.length + images.added.length);
+  if (bad) return bad;
 
   if (f.upload) {
     try { await saveSourceUpload(c.env, campaign.id, f.upload); }
@@ -562,6 +571,7 @@ app.post("/campaigns/:id", async (c) => {
 
   try { await saveImageSelection(c.env, campaign.id, images); }
   catch { return c.text("Could not save your images. Your brief is kept; try submitting again.", 503); }
+  await reuseAutoImageReadings(c.env,user.id,fstr(form,"image_reading_job"),images.added.map((item)=>item.image)).catch(()=>undefined);
 
   await campaigns.update(c.env.DB, campaign.id, {
     idea: f.idea,
@@ -703,7 +713,7 @@ app.get("/runs/:id", async (c) => {
       const review = await loadEditorial(c.env, article.id);
       if (review) reviews[article.id] = review;
     }
-    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources, readiness, Object.fromEntries(await Promise.all(list.map(async (article) => [article.id, await loadInline(c.env, article.id)])))));
+    return c.html(resultScreen(nav, run, list, jobs, Object.fromEntries(galleries), reviews, sources, readiness, Object.fromEntries(await Promise.all(list.map(async (article) => [article.id, await loadInline(c.env, article.id)]))),Object.fromEntries(await Promise.all(list.map(async (article) => [article.id,await loadUploadedPlacements(c.env,article.id)])))));
   }
   const savedReviews = run.state === "failed" || run.state === "styling"
     ? await Promise.all((await articles.listForRun(c.env.DB, run.id)).map(async (article) => ({ article, checkpoint: await loadEditorial(c.env, article.id) }))) : [];
@@ -921,6 +931,55 @@ app.get("/articles/:id/uploaded-images/:imageId", async (c) => {
   return serveR2(c.env, image.r2_key, image.content_type, `uploaded-image.${imageExtension(image.content_type)}`);
 });
 
+app.get("/articles/:id/uploaded-images/:imageId/enhanced.png", async (c) => {
+  const article = await articles.getForUser(c.env.DB,c.req.param("id"),c.get("user").id);
+  if (!article || !IMAGE_ID.test(c.req.param("imageId"))) return c.notFound();
+  const image = runImages(await runs.get(c.env.DB,article.run_id)).find((item) => item.id === c.req.param("imageId"));
+  if (!image?.allow_enhance) return c.notFound();
+  return serveR2(c.env,enhancedImageKey(article.id,image),"image/png","ai-enhanced-image.png");
+});
+
+app.get("/runs/:id/images/:imageId/notes", async (c) => {
+  const run = await runs.getForUser(c.env.DB,c.req.param("id"),c.get("user").id);
+  const image = runImages(run).find((item) => item.id === c.req.param("imageId"));
+  if (!run || !image) return c.notFound();
+  const saved = await loadVisual(c.env,image);
+  if (!saved?.reading || saved.state !== "ready") return c.text(saved?.error || "Image reading has not finished yet.",409);
+  return new Response(visualBody(saved.reading),{ headers: { "content-type":"text/markdown; charset=utf-8", "content-disposition":"attachment; filename=\"image-visual-notes.md\"" } });
+});
+
+app.post("/articles/:id/uploaded-images/:imageId/presentation",bodyLimit({maxSize:2048}),async (c) => {
+  const article=await articles.getForUser(c.env.DB,c.req.param("id"),c.get("user").id);
+  if (!article) return c.notFound();
+  const run=await runs.get(c.env.DB,article.run_id);
+  if (run?.state!=="ready") return c.json({error:"Wait for this run to finish before choosing a presentation."},409);
+  const image=runImages(run).find((item)=>item.id===c.req.param("imageId"));
+  if (!image?.allow_enhance || image.role==="attachment") return c.notFound();
+  const job=await imageJobs.get(c.env.DB,article.id);
+  if (job?.state==="queued" || job?.state==="working") return c.json({error:"Wait for the current image request to finish."},409);
+  let variant:unknown;
+  try { variant=(await c.req.json<{variant?:unknown}>()).variant; } catch { return c.json({error:"Choose Original or Enhanced."},400); }
+  if (variant!=="original" && variant!=="enhanced") return c.json({error:"Choose Original or Enhanced."},400);
+  const checkpoint=await loadUploadedPlacements(c.env,article.id);
+  const placement=checkpoint?.placements?.find((p)=>p.imageId===image.id);
+  if (!checkpoint || placement?.enhanced!=="ready" || !await c.env.ASSETS.head(enhancedImageKey(article.id,image))) return c.json({error:"No enhanced copy is available. Your original is kept."},409);
+  const target=variant==="enhanced" ? enhancedImageUrl(article.id,image) : uploadedImageUrl(article.id,image.id);
+  const body_html=await new HTMLRewriter().on("img",{element(el){
+    if (![enhancedImageUrl(article.id,image),uploadedImageUrl(article.id,image.id)].includes(el.getAttribute("src") || "")) return;
+    const sourceWidth=variant==="enhanced" ? placement.width || image.width : image.width;
+    const sourceHeight=variant==="enhanced" ? placement.height || image.height : image.height;
+    const width=Math.min(sourceWidth,article.output_format==="email" ? 552 : article.output_format==="word" ? 600 : 760);
+    el.setAttribute("src",target); el.setAttribute("width",String(width)); el.setAttribute("height",String(Math.max(1,Math.round(sourceHeight*width/sourceWidth))));
+  }}).transform(new Response(article.body_html)).text();
+  const format=isOutputFormat(article.output_format) ? article.output_format : "html";
+  const output_body=isRichFormat(format) ? "" : renderOutput(body_html,format,{title:article.title,excerpt:article.excerpt,keyPhrases:parseKeyPhrases(article.key_phrases),maxWords:Number.MAX_SAFE_INTEGER}).body;
+  placement.selectedVariant=variant;
+  await c.env.ASSETS.put(uploadedPlacementKey(article.id),JSON.stringify(checkpoint));
+  await articles.update(c.env.DB,article.id,{body_html,output_body,bundle_r2_key:null,...(image.role==="hero" ? {png_r2_key:variant==="enhanced" ? enhancedImageKey(article.id,image) : `articles/${article.id}/featured.png`} : {})});
+  await enqueueBundle(c.env,article.run_id,article.id);
+  return c.json({ok:true,body_html,output_body,variant});
+});
+
 app.get("/articles/:id/images/:version/:asset", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   if (!article) return c.notFound();
@@ -979,7 +1038,9 @@ app.get("/articles/:id/output", async (c) => {
   const a = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   if (!a) return c.notFound();
   const format: OutputFormat = isOutputFormat(a.output_format) ? a.output_format : "html";
-  const exportBody = await exportInlineHtml(c.env, a);
+  let exportBody: string;
+  try { exportBody = await exportInlineHtml(c.env, a); }
+  catch (error) { if (error instanceof EmbeddedImageLimitError) return c.text(error.message,413); throw error; }
   const rendered =
     !isRichFormat(format) && format !== "markdown" && a.output_body
       ? { body: a.output_body, ext: "txt", mime: "text/plain; charset=utf-8" }

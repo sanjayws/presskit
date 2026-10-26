@@ -50,7 +50,7 @@ export async function sanitizeHtml(html: string, articleId?: string, uploadedIds
         el.removeAndKeepContent(); // unwrap unknown tags, keep their text
         return;
       }
-      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => ["png", "svg"].some((kind) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.${kind}`)) && !uploadedIds.some((id) => /^upl_[a-f0-9]{32}$/.test(id) && el.getAttribute("src") === `/articles/${articleId}/uploaded-images/${id}`))) { el.remove(); return; }
+      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => ["png", "svg"].some((kind) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.${kind}`)) && !uploadedIds.some((id) => /^upl_[a-f0-9]{32}$/.test(id) && ["","/enhanced.png"].some((suffix) => el.getAttribute("src") === `/articles/${articleId}/uploaded-images/${id}${suffix}`)))) { el.remove(); return; }
       if (tag === "figure" && !/^[1-3]$/.test(el.getAttribute("data-presskit-inline") || "")) el.removeAttribute("data-presskit-inline");
       if (tag === "figure" && !uploadedIds.includes(el.getAttribute("data-presskit-upload") || "")) el.removeAttribute("data-presskit-upload");
       const allow = ATTR_ALLOW[tag] ?? EMPTY;

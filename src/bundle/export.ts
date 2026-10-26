@@ -1,6 +1,7 @@
 import { articleSchemaStarter, seoDraftReview } from "../seo/review";
 import { runs } from "../db/repos";
-import { imageExtension, runImages, uploadedImageFile, MAX_IMAGE_BYTES } from "../images/uploads";
+import { imageExtension, runImages, uploadedImageFile, MAX_IMAGE_BYTES, enhancedImageKey, enhancedImageFile, imageTag } from "../images/uploads";
+import { loadVisual, visualBody } from "../images/vision";
 import { exportInlineHtml, loadInline, inlineKey, inlineKind } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
@@ -14,7 +15,7 @@ import { isOutputFormat } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
 
-export const BUNDLE_VERSION = "uploads-2026-10-26.1";
+export const BUNDLE_VERSION = "visual-context-2026-10-26.1";
 
 export interface BundleMeta {
   title: string;
@@ -129,9 +130,13 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
       const object = await env.ASSETS.get(image.r2_key);
       if (!object || object.size > MAX_IMAGE_BYTES) throw new Error("An uploaded image is unavailable. Try downloading again.");
       files[uploadedImageFile(image)] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
+      const enhanced = image.allow_enhance ? await env.ASSETS.get(enhancedImageKey(article.id,image)) : null;
+      if (enhanced && enhanced.size<=6000000) files[enhancedImageFile(image)] = [new Uint8Array(await enhanced.arrayBuffer()),{level:0}];
+      const reading = await loadVisual(env,image);
+      if (reading?.state==="ready" && reading.reading) files[`visual-notes-${image.id.slice(4)}.md`] = strToU8(visualBody(reading.reading));
     }
-    files["uploaded-images.json"] = strToU8(JSON.stringify(uploads.map((image) => ({ file: uploadedImageFile(image), originalFilename: image.filename, description: image.description, role: image.role, width: image.width, height: image.height, contentType: image.content_type })), null, 2));
-    files["uploaded-images.txt"] = strToU8("Your original uploaded images are included with descriptions and intended roles in uploaded-images.json. Inside-article placement is supported for HTML, Markdown, email and Word; other channels keep separate downloadable attachments. Upload images to the destination media library and replace local paths. Original files are not cropped, resized or redacted; check privacy, permissions and destination previews before publishing. Descriptions guide placement and alt text, not factual verification.\n");
+    files["uploaded-images.json"] = strToU8(JSON.stringify(uploads.map((image) => ({ file: uploadedImageFile(image), tag:imageTag(image),useWhen:image.use_when || "",enhancementAllowed:Boolean(image.allow_enhance),originalFilename: image.filename, description: image.description, role: image.role, width: image.width, height: image.height, contentType: image.content_type })), null, 2));
+    files["uploaded-images.txt"] = strToU8("Your originals, tags, descriptions and usage directions are listed in uploaded-images.json. Available visual-notes-*.md files contain AI readings of ORIGINAL pixels/visible text, not independent verification of feature operation or compliance. Available *-enhanced.png files are separately generated presentation edits: review text and UI against the original before use. Inside-article placement is supported for HTML, Markdown, email and Word; other channels keep separate attachments. Upload images to the destination media library and replace local paths. Original files are not cropped, resized or redacted; check privacy, permissions and destination previews before publishing.\n");
   }
   return zipSync(files, { level: 6 });
 }

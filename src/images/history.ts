@@ -7,6 +7,7 @@ export interface ImageVersion {
   id: string;
   createdAt: string | null;
   uploaded?: boolean;
+  enhanced?: boolean;
 }
 
 /** Version IDs resolve only inside the authenticated article's asset directory. */
@@ -44,7 +45,7 @@ export async function listImageVersions(bucket: R2Bucket, article: Article, job?
       if (!id) continue;
       // A job may have written its PNG but not yet validated/attached it.
       if (id === job?.id && id !== current && (job.state === "queued" || job.state === "working")) continue;
-      versions.push({ id, createdAt: object.uploaded.toISOString(), ...(object.customMetadata?.source === "upload" ? { uploaded: true } : {}) });
+      versions.push({ id, createdAt: object.uploaded.toISOString(), ...(object.customMetadata?.source === "upload" ? { uploaded: true } : {}), ...(object.customMetadata?.source === "enhanced" ? { enhanced: true } : {}) });
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
