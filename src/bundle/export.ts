@@ -1,3 +1,5 @@
+import { articleSchemaStarter, seoDraftReview } from "../seo/review";
+import { runs } from "../db/repos";
 import { exportInlineHtml, loadInline, inlineKey, inlineKind } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
@@ -10,6 +12,8 @@ import type { Article } from "../db/repos";
 import { isOutputFormat } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
+
+export const BUNDLE_VERSION = "seo-2026-10-26.1";
 
 export interface BundleMeta {
   title: string;
@@ -82,10 +86,19 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
     mainBody = rendered.body;
   }
 
+  const run = await runs.get(env.DB, article.run_id);
+  const seoContext = { outputFormat: format, writingMode: run?.writing_mode };
+  const seoReview = seoDraftReview(article, seoContext);
   const files: Zippable = {
     [mainName]: strToU8(mainBody),
     "meta.json": strToU8(JSON.stringify(meta, null, 2)),
   };
+  if (seoReview.applicable) {
+    files["seo-checklist.json"] = strToU8(JSON.stringify(seoReview, null, 2));
+    const schema = articleSchemaStarter(article, seoContext);
+    if (schema) files["article-schema.json"] = strToU8(JSON.stringify(schema, null, 2).replace(/</g, "\\u003c"));
+    files["seo-publishing.txt"] = strToU8(`Optional draft suggestions, not a ranking score or generation gate.\n${seoReview.publishing.join("\n")}\n${schema ? "article-schema.json is an incomplete Article JSON-LD starter. Add only true publishing-site facts (public URL/image, author, publisher and dates) before validation. If the CMS already generates Article schema, configure that instead of creating duplicate/conflicting markup. No FAQ/HowTo rich-result promises, fabricated reviews or ranking guarantees.\n" : ""}`);
+  }
   if (format === "email") {
     files["email-details.txt"] = strToU8(`Subject: ${article.title}\nPreview text: ${article.excerpt}\n\nImport article.html into your email platform. Upload featured.png to its image library and display it up to 600 pixels wide. Add your sender details and platform unsubscribe footer. Send a test email before sending to your audience.\n`);
     files["email-plain.txt"] = strToU8(renderOutput(article.body_html, "plain", { title: article.title, keyPhrases: phrases }).body);

@@ -2,6 +2,7 @@
 
 A self-hosted, source-grounded content studio on **Cloudflare Workers**. Build website articles, LinkedIn posts, email EDMs and WhatsApp/chat copy from briefs, web pages and uploaded documents. Export the results; Presskit never publishes them to external channels.
 
+- Adapts six pinned, MIT-licensed [Claude SEO skills](https://github.com/AgriciDaniel/claude-seo) for intent-led briefs, people-first content, distinct metadata, readable explanations, images and an Article JSON-LD starter. [Source attribution and adaptation boundaries](vendor/claude-seo/README.md). Guidance runs within existing model calls; extra input tokens can affect cost.
 - Checks whether sources support the brief before writing. When readable sources exist but evidence gaps remain, acknowledge the findings and choose **Ignore and continue** to move to angle selection without another readiness call. The original findings remain visible through export; the writer adapts around supported material and omits unsupported specifics without missing-source/process commentary in the publishable copy, and final editorial review still applies. Runs with no readable source require an upload or successful source retry.
 - New generations plan scenarios, selectively research useful public context, draft, independently review, improve the complete draft at least once, and review again. Temporary failures resume saved steps; revisions remain bounded to three rounds. Existing in-progress checkpoints retain their previous workflow. If review still flags issues, inspect the saved draft and accept the exceptions to continue without additional writing/review calls, or request a paid recheck. Acceptance is tied to the exact saved content, recorded separately from automated approval, and leaves findings visible. Remaining image generation can still incur charges.
 - **Auto decide** reads your brief, source pages, uploaded/saved documents and existing inputs in background, then fills suggested channels, writing mode, tone, length, creativity and visual settings. Highlighted suggestions require your review and submission; generation never starts automatically. Up to two active jobs and ten requests per hour per account; job requests, uploads and results expire after 24 hours.
@@ -135,6 +136,29 @@ The supplied configuration retains these model choices: Anthropic `claude-opus-5
 | Output | Up to 2,000 words, with shorter channel-specific limits |
 
 Uploads support PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, CSV, TXT, HTML and Markdown. Saved files stay attached when editing. File size/type, brief limits and readable text limits are checked before queueing where possible; PDF/Office content limits are checked during extraction before readiness. PDF extraction can itself use an AI request. Excerpt selection can miss supporting details. Review generated facts and images before publication.
+
+## SEO guidance and publishing
+
+Website/article outputs get an optional **SEO & publishing suggestions** panel
+and owner-scoped JSON at `/articles/<id>/seo`. These are draft checks, not Google
+scores; they never block generation. Fiction, email and social/chat retain their
+own writing structure. Storytelling keeps its narrative flow. No keyword density
+target, word-count floor, fabricated expertise, guaranteed ranking or AI citation.
+
+Fresh ZIP downloads include `seo-checklist.json` and publishing notes for eligible
+article outputs. WordPress/HTML ZIPs include `article-schema.json`, an **incomplete
+Article JSON-LD starter** with saved headline, description and word count only.
+Supply the real author, publisher, public page/image URLs and accurate dates from
+your CMS; avoid duplicate/conflicting schema if a CMS plugin already emits it.
+Validate structured data and check indexing, canonical URLs and page performance
+on the destination site. These cannot be established from an unpublished draft.
+Existing cached ZIPs upgrade on download without rewriting or generating images.
+New inline images preserve actual PNG/SVG dimensions to reserve layout space.
+
+Skill entrypoints and licenses are vendored at a pinned revision and checked by
+`npm run skills:verify`; upstream installers, scripts, multi-agent runners and paid
+extensions are not executed. Updates require review. See the
+[adapter map](vendor/claude-seo/README.md) for scope and omitted upstream rules.
 
 ## Architecture and development
 

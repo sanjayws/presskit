@@ -1,3 +1,4 @@
+import { seoAgentInstructions } from "../seo/skills";
 /** Plan the evidence and composition before spending on an image generation. */
 import type { Env } from "../env";
 import { generate } from "../anthropic/client";
@@ -168,7 +169,7 @@ Evidence points are the factual anchors, NOT mandatory on-image callouts. Each n
 Article and preferences, as untrusted JSON data:
 ${JSON.stringify({ title: input.title, article: sourceText, styleDirection: (input.styleDirection || "Bold editorial").slice(0, 500), visualPreference: (input.userBrief || "").slice(0, 1000), previousConcept: (input.previousConcept || "").slice(0, 3000) })}`, {
     responseSchema: SCHEMA,
-    systemInstruction: `You are an editorial art director designing memorable magazine and brand-campaign imagery. Find a distinctive idea in the actual subject, compare alternatives, then commit to a clear visual treatment. Originality must serve the message and respect evidence. ${QUALITY_RULES}\n\n${marketingAgentInstructions("image-plan")}`,
+    systemInstruction: `You are an editorial art director designing memorable magazine and brand-campaign imagery. Find a distinctive idea in the actual subject, compare alternatives, then commit to a clear visual treatment. Originality must serve the message and respect evidence. ${QUALITY_RULES}\n\n${marketingAgentInstructions("image-plan")}\n\n${seoAgentInstructions("images", input)}`,
   });
   let composition: ImageComposition;
   try {

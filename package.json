@@ -12,7 +12,7 @@
     "audit": "npm audit --audit-level=high",
     "pretest": "npm run skills:verify && npm run test:publication",
     "test": "vitest run",
-    "skills:verify": "node scripts/verify-marketing-skills.mjs",
+    "skills:verify": "node scripts/verify-marketing-skills.mjs && node scripts/verify-seo-skills.mjs",
     "migrate:local": "wrangler d1 migrations apply blog_studio --local",
     "migrate:remote": "wrangler d1 migrations apply blog_studio --remote",
     "test:publication": "node --test scripts/publication-checks.mjs"

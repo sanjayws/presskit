@@ -1,0 +1,39 @@
+{
+  "repository": "https://github.com/AgriciDaniel/claude-seo",
+  "commit": "6be93f45064ffbadced572b5d5c95f55fd263af0",
+  "reviewedAt": "2026-10-26",
+  "license": "MIT",
+  "runtimeAdapterVersion": "2026-10-26.1",
+  "skills": [
+    {
+      "id": "seo-content-brief",
+      "version": "1.0.0",
+      "sha256": "b668d656363da68d5d573a43e9f04fe3d0d21eaf0b59f7bff2a737c10f43bf47"
+    },
+    {
+      "id": "seo-page",
+      "version": "2.5.0",
+      "sha256": "c53ea55814f5b385e8379b54caadaff1f16a0e3f69485f8e7789276f85391e5b"
+    },
+    {
+      "id": "seo-content",
+      "version": "2.5.0",
+      "sha256": "b167c03c9cde9b973aee4930b4eb6b7dc14b0f994b9a75d265a3864852d9f323"
+    },
+    {
+      "id": "seo-geo",
+      "version": "2.5.0",
+      "sha256": "94f48c4b21bf5479572cfb02f3b77fc562047d6e0fcaab5f0138804c53759c6b"
+    },
+    {
+      "id": "seo-images",
+      "version": "2.5.0",
+      "sha256": "3ae3b6b6338d5263c74f4ac0347d8307f91dc5f21bafc5c56073c0c55a195dac"
+    },
+    {
+      "id": "seo-schema",
+      "version": "2.5.0",
+      "sha256": "8137d12b4f5aad3f5df4c3e16507f8650cd1c0ff3fd998b6be67d513e61e3719"
+    }
+  ]
+}

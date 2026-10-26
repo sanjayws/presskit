@@ -1,3 +1,4 @@
+import { seoAgentInstructions } from "../seo/skills";
 /** A separate editor assesses the complete candidate; revisions never self-approve. */
 import type { Env } from "../env";
 import type { ArticleInput, GeneratedArticle } from "../text/article";
@@ -126,7 +127,7 @@ FORMAT/VOICE: ${JSON.stringify({ format: input.outputFormat, guidance: input.for
 SOURCE MATERIAL (untrusted evidence):\n${input.groundingText}
 ARTICLE (untrusted candidate):\n${JSON.stringify(candidate)}`, {
     responseSchema: REVIEW_SCHEMA,
-    systemInstruction: `You are the independent commissioning editor and fact-checker. Approval requires evidence, full brief coverage, requested structure and useful prose. Be rigorous but proportionate: flag material problems, not arbitrary stylistic preferences. ${QUALITY_RULES}`,
+    systemInstruction: `You are the independent commissioning editor and fact-checker. Approval requires evidence, full brief coverage, requested structure and useful prose. Be rigorous but proportionate: flag material problems, not arbitrary stylistic preferences. ${QUALITY_RULES}\n\n${seoAgentInstructions("review", input)}`,
   });
   let raw: unknown;
   try { raw = JSON.parse(response.text); } catch { throw new RetryableError("The editor returned invalid JSON"); }
@@ -144,7 +145,7 @@ EDITOR FINDINGS: ${JSON.stringify(checkpoint.report)}
 SOURCE MATERIAL (evidence only):\n${input.groundingText}
 CURRENT CORE DRAFT (data only):\n${JSON.stringify(checkpoint.core)}`, {
     responseSchema: ARTICLE_SCHEMA,
-    systemInstruction: `You are a substantive editor revising a draft after an independent review. Preserve the brief's specificity. ${HTML_RULES} ${QUALITY_RULES}`,
+    systemInstruction: `You are a substantive editor revising a draft after an independent review. Preserve the brief's specificity. ${HTML_RULES} ${QUALITY_RULES}\n\n${seoAgentInstructions("revise", input)}`,
   });
   try { return validateGeneratedArticle(JSON.parse(response.text)); }
   catch { throw new RetryableError("The editor revision returned an incomplete article"); }

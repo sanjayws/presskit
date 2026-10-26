@@ -1,3 +1,4 @@
+import { articleSchemaStarter, seoDraftReview } from "./seo/review";
 import { optionJobKey, optionResultKey, recoverOptionJobs, type OptionRequest } from "./editorial/auto-decide";
 import { exportInlineHtml, inlineKey, loadInline } from "./images/inline";
 import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
@@ -36,7 +37,7 @@ import {
 import { validateGroundingUrl, uploadText } from "./grounding/ingest";
 import { enqueueBundle, enqueueWrite, resumeTopics, startRun } from "./pipeline/run";
 import { handleQueue } from "./pipeline/queue";
-import { buildBundle } from "./bundle/export";
+import { buildBundle, BUNDLE_VERSION } from "./bundle/export";
 import { sanitizeHtml } from "./content/sanitize";
 import { canonicalizeSlug, sanitizeKeyPhrases } from "./content/validate";
 import { parseReferenceLinksText } from "./content/enrich";
@@ -877,6 +878,14 @@ app.get("/articles/:id/images", async (c) => {
   return c.json({ ...imageStatus(article, job), html: imageGallery(article, versions), count: versions.length });
 });
 
+app.get("/articles/:id/seo", async (c) => {
+  const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
+  if (!article) return c.notFound();
+  const run = await runs.get(c.env.DB, article.run_id);
+  const context = { outputFormat: isOutputFormat(article.output_format) ? article.output_format : "html", writingMode: run?.writing_mode } as const;
+  return c.json({ review: seoDraftReview(article, context), schemaStarter: articleSchemaStarter(article, context) });
+});
+
 app.get("/articles/:id/inline-images/:file", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   const slot = /^([1-3])\.(png|svg)$/.exec(c.req.param("file"));
@@ -907,7 +916,7 @@ app.get("/articles/:id/bundle.zip", async (c) => {
   // Stream the precomputed bundle from R2 when available; otherwise build once.
   if (a.bundle_r2_key) {
     const obj = await c.env.ASSETS.get(a.bundle_r2_key);
-    if (obj) {
+    if (obj?.customMetadata?.bundleVersion === BUNDLE_VERSION) {
       return new Response(obj.body, {
         headers: {
           "content-type": "application/zip",
@@ -915,8 +924,12 @@ app.get("/articles/:id/bundle.zip", async (c) => {
         },
       });
     }
+    if (obj) await obj.body.cancel();
   }
   const zip = await buildBundle(c.env, a);
+  // Rebuild the cache from the latest DB article off the request path, so a
+  // concurrent edit cannot be overwritten by this download's older snapshot.
+  c.executionCtx.waitUntil(enqueueBundle(c.env, a.run_id, a.id));
   return new Response(zip, {
     headers: {
       "content-type": "application/zip",

@@ -39,6 +39,8 @@ describe("inline illustrations", () => {
     const article = (await articles.get(env.DB, f.article.id))!;
     expect(article.body_html.indexOf("<figure")).toBeLessThan(article.body_html.indexOf("Choose the next"));
     expect(article.body_html).toContain("&quot;planning&quot;");
+    expect(article.body_html).toContain('width="1" height="1"');
+    expect(article.body_html).toContain('decoding="async"');
     expect(await inlineImageStep(env, article, f.campaign)).toBe(true); // no regeneration on replay
     expect((await articles.get(env.DB, article.id))!.body_html.match(/<figure/g)).toHaveLength(1);
     expect((await loadInline(env, article.id))?.slots[0]?.state).toBe("ready");

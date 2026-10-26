@@ -35,6 +35,7 @@ import {
   formatWriterGuidance,
   channelProfile,
   isCampaignChannel,
+  isOutputFormat,
 } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { renderFeaturedVisual } from "../images/render";
@@ -43,7 +44,7 @@ import { imageJobs } from "../db/image-jobs";
 import { RetryableError, StageBusyError } from "../errors";
 import { sendReadyEmail } from "../notify/postmark";
 import { enrichmentReserveWords, readReferenceLinks } from "../content/enrich";
-import { buildBundle } from "../bundle/export";
+import { buildBundle, BUNDLE_VERSION } from "../bundle/export";
 import type { Article, ArticleInsert } from "../db/repos";
 import {
   articleSignature,
@@ -156,6 +157,7 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
       campaign.idea,
       grounding,
       `${articleTypeByValue(campaign.article_type).research}\n${acceptedGapsGuidance(readiness?.acceptance ? readiness.gaps : undefined)}\nDestinations: ${selectedChannels(campaign.output_format, campaign.output_formats).map((format) => `${format}: ${channelProfile(format).summary}`).join("; ")}. For email and chat propose one focused message that fits the channel; for LinkedIn propose one professional insight. Channel suitability takes priority over SEO framing.`,
+      { outputFormat: isOutputFormat(campaign.output_format) ? campaign.output_format : "html", writingMode: campaign.article_type },
     );
 
     // Human picks next; no auto-advance past selection.
@@ -386,7 +388,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
         const zip = await buildBundle(env, article);
         const bundleKey = `articles/${article.id}/bundle.zip`;
         await env.ASSETS.put(bundleKey, zip, {
-          httpMetadata: { contentType: "application/zip" },
+          httpMetadata: { contentType: "application/zip" }, customMetadata: { bundleVersion: BUNDLE_VERSION },
         });
         await articlesRepo.update(env.DB, article.id, { bundle_r2_key: bundleKey });
       } catch (e) {
@@ -471,7 +473,7 @@ export async function rebuildArticleBundle(
   const zip = await buildBundle(env, article);
   const bundleKey = article.bundle_r2_key || `articles/${article.id}/bundle.zip`;
   await env.ASSETS.put(bundleKey, zip, {
-    httpMetadata: { contentType: "application/zip" },
+    httpMetadata: { contentType: "application/zip" }, customMetadata: { bundleVersion: BUNDLE_VERSION },
   });
   if (!article.bundle_r2_key) {
     await articlesRepo.update(env.DB, article.id, { bundle_r2_key: bundleKey });

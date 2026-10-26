@@ -1,3 +1,4 @@
+import { seoAgentInstructions, type SeoContext } from "../seo/skills";
 /** Grounded topic proposal using Anthropic web search for reader intent.
  * Search does not silently add factual evidence to the writer's source set.
  */
@@ -85,10 +86,11 @@ export async function proposeTopics(
   idea: string,
   groundingSummary: string,
   researchGuidance = "",
+  seoContext: SeoContext = {},
 ): Promise<ProposedTopic[]> {
   const res = await generate(env, buildPrompt(idea, groundingSummary, researchGuidance), {
     webSearch: true,
-    systemInstruction: `${SYSTEM}\n\n${marketingAgentInstructions("topic-research")}`,
+    systemInstruction: `${SYSTEM}\n\n${marketingAgentInstructions("topic-research")}\n\n${seoAgentInstructions("research", seoContext)}`,
   });
 
   const raw = extractJson<any[]>(res.text);
@@ -133,6 +135,7 @@ export async function generateTopicsForRun(
   groundingSummary: string,
   /** Article-type research guidance (e.g. comparison = research the contenders). */
   researchGuidance = "",
+  seoContext: SeoContext = {},
 ): Promise<Topic[]> {
   // Accumulate DISTINCT angles across bounded attempts and MERGE them (two
   // 2-angle responses with different takes can together satisfy the contract),
@@ -143,7 +146,7 @@ export async function generateTopicsForRun(
     attempt < MAX_TOPIC_ATTEMPTS && dedupeDistinct(collected).length < REQUIRED_TOPICS;
     attempt++
   ) {
-    collected.push(...(await proposeTopics(env, idea, groundingSummary, researchGuidance)));
+    collected.push(...(await proposeTopics(env, idea, groundingSummary, researchGuidance, seoContext)));
   }
 
   const distinct = dedupeDistinct(collected);

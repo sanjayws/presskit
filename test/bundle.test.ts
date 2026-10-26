@@ -28,7 +28,7 @@ describe("download-all bundle (T10)", () => {
     expect(doc).toContain("<p>hi</p>");
   });
 
-  it("produces a zip with html + meta.json (and assets when present)", async () => {
+  it("produces an article ZIP with metadata, assets and advisory SEO files", async () => {
     const u = await users.upsertByEmail(env.DB, "zip@example.com");
     const c = await campaigns.create(env.DB, {
       user_id: u.id,
@@ -55,7 +55,7 @@ describe("download-all bundle (T10)", () => {
     const zip = await buildBundle(env, a);
     const entries = unzipSync(zip);
     const names = Object.keys(entries).sort();
-    expect(names).toEqual(["article.html", "featured.png", "image-brief.json", "meta.json"]);
+    expect(names).toEqual(["article-schema.json", "article.html", "featured.png", "image-brief.json", "meta.json", "seo-checklist.json", "seo-publishing.txt"]);
     expect(JSON.parse(strFromU8(entries["image-brief.json"]!)).prompt).toBe("Approved article infographic");
 
     const meta = JSON.parse(strFromU8(entries["meta.json"]!));

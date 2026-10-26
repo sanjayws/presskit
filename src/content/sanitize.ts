@@ -20,7 +20,7 @@ const DANGEROUS_TAGS = new Set([
 
 // Per-tag allowed attributes. Everything else (class, id, style, on*, etc.) dropped.
 const ATTR_ALLOW: Record<string, Set<string>> = {
-  img: new Set(["src", "alt", "loading"]),
+  img: new Set(["src", "alt", "loading", "width", "height", "decoding"]),
   figure: new Set(["data-presskit-inline"]),
   a: new Set(["href", "title"]),
   th: new Set(["colspan", "rowspan"]),
@@ -61,6 +61,11 @@ export async function sanitizeHtml(html: string, articleId?: string): Promise<st
           el.removeAttribute(name);
           continue;
         }
+        if (tag === "img" && (n === "width" || n === "height")) {
+          const value = el.getAttribute(name) || "";
+          if (!/^[1-9]\d{0,3}$/.test(value) || Number(value) > 8192) el.removeAttribute(name);
+        }
+        if (tag === "img" && n === "decoding" && !["async", "sync", "auto"].includes(el.getAttribute(name) || "")) el.removeAttribute(name);
         if (tag === "a" && n === "href" && !safeHref(el.getAttribute(name) ?? "")) {
           el.removeAttribute(name);
         }

@@ -18,6 +18,7 @@ export type MarketingAgentRole =
   | "short-article" | "image-plan" | "image-render";
 export interface MarketingSkillContext {
   outputFormat?: OutputFormat;
+  writingMode?: string;
   biasLevel?: number;
 }
 
@@ -83,6 +84,7 @@ export function marketingSkillsFor(
 ): MarketingSkillId[] {
   const selected = Object.prototype.hasOwnProperty.call(ROLE_SKILLS, role) ? ROLE_SKILLS[role] : undefined;
   if (!selected) throw new Error("Unknown marketing agent role");
+  if (context.writingMode === "fiction") return selected.filter((id) => id !== "ai-seo");
   if (!["social", "linkedin", "email", "chat"].includes(context.outputFormat || "") || role.startsWith("image-") || role === "topic-research") return [...selected];
   // A social post needs its own structure, not long-form SEO formatting.
   return [...selected.filter((id) => id !== "ai-seo"), ...(context.outputFormat === "email" ? [] : ["social" as const])];

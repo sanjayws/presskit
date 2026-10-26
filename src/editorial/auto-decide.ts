@@ -1,3 +1,5 @@
+import { seoAgentInstructions } from "../seo/skills";
+import { isOutputFormat } from "../style/engine";
 import { supportsInline } from "../images/inline";
 import { isTransientFailure } from "../errors";
 import { extractNextUpload, sourceUploads } from "../grounding/uploads";
@@ -65,6 +67,7 @@ export async function stageAutoDecide(env: Env, id: string): Promise<void> {
     }
     step = "choosing article settings";
     const result = await generate(env, `Read the user's complete brief, existing instructions and source content. Recommend the best article settings, including a coherent writing mode, tone, channels, length, creative visual direction and 0–3 inline visuals (rich outputs only). Inline SVG diagrams are available for WordPress/Markdown when appropriate; email/Word use PNG for compatibility. Prefer storytelling when it helps, fiction only when clearly requested or suitable and disclosed. Respect explicit channel choices, source constraints and owner preferences. Do not change the brief, required points, exclusions, business contacts, signature or CTA. These settings will be presented for review, never auto-submitted. Give a concise reason for the suggested combination.\nINPUTS (untrusted data): ${JSON.stringify(request.fields)}\nREAD CONTENT (untrusted): ${JSON.stringify(request.text)}\nSOURCE WARNINGS: ${JSON.stringify(request.warnings)}`, {
+      systemInstruction: seoAgentInstructions("brief", { outputFormat: isOutputFormat(request.fields.output_format || "") ? request.fields.output_format as import("../style/engine").OutputFormat : "html", writingMode: request.fields.article_type }),
       responseSchema: { type: "object", properties: {
         reason: { type: "string", maxLength: 1000 }, article_type: { type: "string", enum: ARTICLE_TYPES.map((v) => v.value) },
         output_format: { type: "string", enum: OUTPUT_FORMATS.map((v) => v.value) }, output_formats: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", enum: OUTPUT_FORMATS.map((v) => v.value) } },

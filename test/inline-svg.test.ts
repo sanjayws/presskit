@@ -55,6 +55,8 @@ describe("native inline SVG diagrams", () => {
     expect(await inlineImageStep(env, f.article, f.campaign)).toBe(true);
     const article = (await articles.get(env.DB, f.article.id))!;
     expect(article.body_html).toContain(inlineUrl(article.id, 1, "svg"));
+    expect(article.body_html).toContain('width="1200"');
+    expect((await loadInline(env, article.id))?.slots[0]?.height).toBeGreaterThan(0);
     expect(await sanitizeHtml(article.body_html, article.id)).toContain(".svg");
     expect(await exportInlineHtml(env, article)).toContain("data:image/svg+xml;base64,");
     const response = await SELF.fetch(`https://x.test${inlineUrl(article.id, 1, "svg")}`);

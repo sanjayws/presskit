@@ -1,3 +1,4 @@
+import { seoAgentInstructions } from "../seo/skills";
 import { acceptedGapsGuidance, type AcceptedGap } from "../editorial/accepted-gaps";
 /**
  * Agentic article generation. Instead of one giant call, the writer works like
@@ -360,7 +361,7 @@ ${groundingBlock(input)}
 Return JSON: title, body_html (short <p> paragraphs, optionally a <ul>; use <h2> subheadings only when they genuinely help and the writer instructions above do not forbid them), excerpt, meta_desc (<=155 chars), slug (kebab-case), key_phrases (4 to 8).`;
   const res = await generate(env, prompt, {
     responseSchema: ARTICLE_SCHEMA,
-    systemInstruction: `${SHORT_SYSTEM}\n\n${marketingAgentInstructions("short-article", input)}`,
+    systemInstruction: `${SHORT_SYSTEM}\n\n${marketingAgentInstructions("short-article", input)}\n\n${seoAgentInstructions("write", input)}`,
   });
   let p: Record<string, unknown>;
   try {
@@ -395,7 +396,7 @@ export async function planArticle(
 ): Promise<ArticlePlan> {
   const res = await generate(env, buildPlanPrompt(input), {
     responseSchema: PLAN_SCHEMA,
-    systemInstruction: `${PLAN_SYSTEM}\n\n${marketingAgentInstructions("article-plan", input)}`,
+    systemInstruction: `${PLAN_SYSTEM}\n\n${marketingAgentInstructions("article-plan", input)}\n\n${seoAgentInstructions("plan", input)}`,
   });
   let raw: unknown;
   try {
@@ -467,7 +468,7 @@ export async function generateArticle(
   }
 
   const pk = input.progressKey;
-  const sectionSystem = `${SECTION_SYSTEM}\n\n${marketingAgentInstructions("article-write", input)}`;
+  const sectionSystem = `${SECTION_SYSTEM}\n\n${marketingAgentInstructions("article-write", input)}\n\n${seoAgentInstructions("write", input)}`;
 
   // Resume from a checkpoint if a prior attempt got partway, otherwise plan and
   // write the intro fresh. Sections already written are never regenerated.
