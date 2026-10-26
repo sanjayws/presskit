@@ -119,16 +119,17 @@ async function copyRich(id,plainOnly){var el=document.getElementById(id);if(!el)
 /* --- WYSIWYG: snapshot of the last-saved state, for Cancel/revert --- */
 var SNAP={};
 /* Field name must match the server contract exactly: body_html, not body. */
-function fieldsOf(card){var rte=card.querySelector('.rte');return {body_html:rte?rte.innerHTML:'',title:val(card,'title'),slug:val(card,'slug'),meta_desc:val(card,'meta'),excerpt:val(card,'excerpt'),key_phrases:val(card,'kp')};}
+function fieldsOf(card){var rte=card.querySelector('.rte');return {body_html:rte?rte.innerHTML:'',title:val(card,'title'),slug:val(card,'slug'),meta_desc:val(card,'meta'),excerpt:val(card,'excerpt'),key_phrases:val(card,'kp'),version:Number(card.dataset.contentVersion||0)};}
 function val(card,f){var el=card.querySelector('[data-field="'+f+'"]');return el?el.value:'';}
 function setVal(card,f,v){var el=card.querySelector('[data-field="'+f+'"]');if(el)el.value=v;}
+function restoreFields(card,s){var rte=card.querySelector('.rte');if(rte)rte.innerHTML=s.body_html;setVal(card,'title',s.title);setVal(card,'slug',s.slug);setVal(card,'meta',s.meta_desc);setVal(card,'excerpt',s.excerpt);setVal(card,'kp',s.key_phrases);syncTitle(card);}
 /* Mirror the edited title into the read-only headline block at the top. */
 function syncTitle(card){var v=card.querySelector('[data-title-view]');if(v&&card.querySelector('[data-field="title"]'))v.textContent=val(card,'title');}
 function snapshot(card){SNAP[card.id]=fieldsOf(card);}
 function markClean(card){card.classList.remove('dirty');}
 function markDirty(card){card.classList.add('dirty');}
 /* Apply the server's canonical saved article back into the editor. */
-function applyCanonical(card,art){if(!art)return;
+function applyCanonical(card,art){if(!art)return;if(typeof art.version==='number')card.dataset.contentVersion=String(art.version);
  if(typeof art.body_html==='string'){var _r=card.querySelector('.rte');if(_r)_r.innerHTML=art.body_html;}
  if(typeof art.title==='string'){setVal(card,'title',art.title);syncTitle(card);}
  if(typeof art.slug==='string')setVal(card,'slug',art.slug);
@@ -143,15 +144,17 @@ document.addEventListener('input',function(e){var card=e.target.closest('.artcar
 async function saveArticle(btn){var card=document.getElementById('card_'+btn.getAttribute('data-save'));if(!card)return;
  var p=fieldsOf(card);var old=btn.textContent;btn.disabled=true;btn.textContent='Saving…';
  try{var r=await fetch('/articles/'+btn.getAttribute('data-save'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(p)});
-  if(!r.ok)throw 0;var d=await r.json().catch(function(){return null;});
+  var d=await r.json().catch(function(){return null;});if(!r.ok)throw Error(d&&d.error?d.error:'Save failed. Check your connection and sign-in, then retry.');
+  var current=fieldsOf(card),changed=JSON.stringify(current)!==JSON.stringify(p);
   if(d&&d.article)applyCanonical(card,d.article);
-  snapshot(card);markClean(card);var status=card.querySelector('[data-save-status]');if(status)status.textContent=d&&d.warnings&&d.warnings.length?'Saved. '+d.warnings.join(' '):'Saved. Your edits have not been reviewed by the editor.';toast('Saved');}
- catch(e){toast('Save failed');}
+  snapshot(card);var status=card.querySelector('[data-save-status]');
+  if(changed){restoreFields(card,current);markDirty(card);if(status)status.textContent='Earlier edits saved. Your newer typing is kept here; save again when ready.';toast('Earlier edits saved; newer edits are still unsaved.');}
+  else{markClean(card);if(status)status.textContent=d&&d.warnings&&d.warnings.length?'Saved. '+d.warnings.join(' '):'Saved. Your edits have not been reviewed by the editor.';toast('Saved');}}
+ catch(e){var status=card.querySelector('[data-save-status]');if(status)status.textContent=e.message||'Save failed. Your unsaved text is kept.';toast('Draft not saved — review the message below.');}
  btn.disabled=false;btn.textContent=old;}
 function cancelEdit(btn){var card=document.getElementById('card_'+btn.getAttribute('data-cancel'));if(!card)return;
  var s=SNAP[card.id];if(!s)return;
- var _r=card.querySelector('.rte');if(_r)_r.innerHTML=s.body_html;setVal(card,'title',s.title);setVal(card,'slug',s.slug);setVal(card,'meta',s.meta_desc);setVal(card,'excerpt',s.excerpt);setVal(card,'kp',s.key_phrases);
- syncTitle(card);markClean(card);toast('Changes discarded');}
+ restoreFields(card,s);markClean(card);toast('Changes discarded');}
 
 ${IMAGE_PROGRESS_SCRIPT}
 ${UPLOAD_IMAGES_SCRIPT}
@@ -686,7 +689,7 @@ ${toolbar(i, a.id, fmt)}
 <pre class="outbox" id="out_${i}">${esc(a.output_body)}</pre>`;
 
       return `
-<div class="card artcard" id="card_${esc(a.id)}" data-format="${fmt}">
+<div class="card artcard" id="card_${esc(a.id)}" data-format="${fmt}" data-content-version="${a.content_version ?? 0}">
 ${reviews[a.id] ? editorialSummary(reviews[a.id]!, a.id, a) : ""}
 <div class="review-strip"><span class="fmtchip">${esc(fmtLabel)}</span><span>${words} words</span><span>${esc(channelProfile(fmt).imageDescription)}</span><span>Saved draft</span></div>
 ${inlineReports[a.id] ? `<p class="field-help" role="status">Inline illustrations: ${inlineReports[a.id]!.slots.filter((slot) => slot.state === "ready").length} ready.${inlineReports[a.id]!.error ? ` ${esc(inlineReports[a.id]!.error!)}` : " Included in the body and download bundle."}</p>` : ""}

@@ -1,7 +1,8 @@
 import { readinessKey } from "../src/grounding/readiness";
 import { acceptanceSnapshot } from "../src/editorial/acceptance";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock, SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { articles, campaigns, runs, users, topics, groundingDocs } from "../src/db/repos";
 import { loadEditorial, saveEditorial, validateReview, type EditorialCheckpoint } from "../src/editorial/review";
 import { stageEditorial, recheckSavedDraft, acceptSavedDraft } from "../src/pipeline/editorial";

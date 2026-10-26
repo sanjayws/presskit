@@ -14,7 +14,7 @@ import type { Env, PipelineMessage } from "../env";
 import {
   articleProgress,
   articles as articlesRepo,
-  campaigns,
+  campaignForRun,
   runs,
   topics as topicsRepo,
   users,
@@ -47,7 +47,7 @@ import { imageJobs } from "../db/image-jobs";
 import { RetryableError, StageBusyError } from "../errors";
 import { sendReadyEmail } from "../notify/postmark";
 import { enrichmentReserveWords, readReferenceLinks } from "../content/enrich";
-import { buildBundle, BUNDLE_VERSION } from "../bundle/export";
+import { buildBundle, BUNDLE_VERSION, bundleFingerprint } from "../bundle/export";
 import type { Article, ArticleInsert } from "../db/repos";
 import {
   articleSignature,
@@ -96,7 +96,7 @@ export async function stageIngest(env: Env, runId: string): Promise<void> {
   try {
     const saved = await getRecovery(env, runId);
     if (saved && saved.stage !== "ingest") return;
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
     campaign.inline_image_count = run.inline_image_count ?? 0;
     campaign.generation_version = run.generation_version ?? 1;
@@ -119,7 +119,7 @@ export async function stageAssess(env: Env, runId: string): Promise<void> {
   try {
     const saved = await getRecovery(env, runId);
     if (saved && saved.stage !== "assess") return;
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (!campaign) throw new Error("The brief for this run is missing.");
     campaign.article_type = run.writing_mode || campaign.article_type;
     const report = await assessReadiness(env, campaign, runId);
@@ -146,7 +146,7 @@ export async function stageTopics(env: Env, runId: string): Promise<void> {
   const owner = await runs.claimStage(env.DB, runId, "drafting_topics", TOPICS_LEASE_MS);
   if (!owner) throw new StageBusyError(Math.max(1, Math.ceil((run.lease_until - Date.now()) / 1000) + 1));
   try {
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
     campaign.inline_image_count = run.inline_image_count ?? 0;
     campaign.generation_version = run.generation_version ?? 1;
@@ -188,7 +188,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
   const owner = await runs.claimStage(env.DB, runId, "writing", WRITE_LEASE_MS);
   if (!owner) throw new StageBusyError(Math.max(1, Math.ceil((run.lease_until - Date.now()) / 1000) + 1));
   try {
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (!campaign) throw new Error(`campaign ${run.campaign_id} not found`);
     campaign.inline_image_count = run.inline_image_count ?? 0;
     campaign.generation_version = run.generation_version ?? 1;
@@ -353,7 +353,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
     const list = await articlesRepo.listForRun(env.DB, runId);
     if (list.length === 0) throw new Error("no articles for image stage");
 
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (campaign) campaign.inline_image_count = run.inline_image_count ?? 0;
     for (const article of list) {
       // Retry only incomplete assets; queue replays do not buy another image.
@@ -408,12 +408,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
     const finalArticles = await articlesRepo.listForRun(env.DB, runId);
     for (const article of finalArticles) {
       try {
-        const zip = await buildBundle(env, article);
-        const bundleKey = `articles/${article.id}/bundle.zip`;
-        await env.ASSETS.put(bundleKey, zip, {
-          httpMetadata: { contentType: "application/zip" }, customMetadata: { bundleVersion: BUNDLE_VERSION },
-        });
-        await articlesRepo.update(env.DB, article.id, { bundle_r2_key: bundleKey });
+        await rebuildArticleBundle(env,article);
       } catch (e) {
         console.error(`bundle build failed for ${article.id}: ${String(e)}`);
       }
@@ -430,7 +425,7 @@ export async function stageImage(env: Env, runId: string, attempt = 1): Promise<
 export async function stageReady(env: Env, runId: string): Promise<void> {
   const run = await runs.get(env.DB, runId);
   if (!run) throw new Error(`run ${runId} not found`);
-  const campaign = await campaigns.get(env.DB, run.campaign_id);
+  const campaign = await campaignForRun(env.DB, run);
   if (!campaign) return;
   const owner = await users.get(env.DB, campaign.user_id);
   const list = await articlesRepo.listForRun(env.DB, runId);
@@ -485,7 +480,8 @@ export async function enqueueBundle(
   runId: string,
   articleId: string,
 ): Promise<void> {
-  await enqueue(env, { runId, stage: "bundle", articleId });
+  try { await enqueue(env, { runId, stage: "bundle", articleId }); }
+  catch { logEvent("bundle.queue_unavailable",{run_id:runId,article_id:articleId}); }
 }
 
 /** Rebuild + store the download bundle for a single article. Best-effort. */
@@ -493,13 +489,20 @@ export async function rebuildArticleBundle(
   env: Env,
   article: Article,
 ): Promise<void> {
+  const fingerprint=await bundleFingerprint(article);
   const zip = await buildBundle(env, article);
-  const bundleKey = article.bundle_r2_key || `articles/${article.id}/bundle.zip`;
-  await env.ASSETS.put(bundleKey, zip, {
-    httpMetadata: { contentType: "application/zip" }, customMetadata: { bundleVersion: BUNDLE_VERSION },
-  });
-  if (!article.bundle_r2_key) {
-    await articlesRepo.update(env.DB, article.id, { bundle_r2_key: bundleKey });
+  const bundleKey = `articles/${article.id}/bundle.zip`;
+  for (let attempt=0;attempt<2;attempt++) {
+    const previous=await env.ASSETS.head(bundleKey);
+    const latest=await articlesRepo.get(env.DB,article.id);
+    if (!latest || await bundleFingerprint(latest)!==fingerprint) return;
+    const stored=await env.ASSETS.put(bundleKey,zip,{
+      httpMetadata:{contentType:"application/zip"},customMetadata:{bundleVersion:BUNDLE_VERSION,fingerprint},
+      onlyIf:previous ? {etagMatches:previous.etag} : {etagDoesNotMatch:"*"},
+    });
+    if (!stored) continue;
+    await articlesRepo.updateIfCurrent(env.DB,article,{bundle_r2_key:bundleKey});
+    return;
   }
 }
 

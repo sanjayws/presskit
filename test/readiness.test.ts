@@ -1,7 +1,8 @@
 import { acceptReadiness, readinessAcceptanceToken } from "../src/grounding/acceptance";
 import { readinessSummary, resultScreen } from "../src/ui/pages";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock, SELF, createMessageBatch } from "cloudflare:test";
+import { env, SELF, createMessageBatch } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { users, campaigns, runs, articles } from "../src/db/repos";
 import { ingestUpload } from "../src/grounding/ingest";
 import { ingestSources, sourceReportKey } from "../src/grounding/report";

@@ -1,7 +1,7 @@
 import { seoAgentInstructions } from "../seo/skills";
 import { isOutputFormat } from "../style/engine";
 import { supportsInline } from "../images/inline";
-import { isTransientFailure } from "../errors";
+import { isTransientFailure, StageBusyError } from "../errors";
 import { extractNextUpload, sourceUploads } from "../grounding/uploads";
 /** Background brief configuration assistant. Suggestions never submit a run. */
 import type { Env } from "../env";
@@ -35,7 +35,7 @@ export async function stageAutoDecide(env: Env, id: string): Promise<void> {
     if (request.images?.length && !request.imagesDone) {
       step="reading uploaded images";
       if (!await readBuildImagesStep(env,request.images)) {
-        await env.DB.prepare("UPDATE brief_option_jobs SET state='queued',lease_until=0 WHERE id=?").bind(id).run();
+        await env.DB.prepare("UPDATE brief_option_jobs SET state='queued',lease_until=0,failures=0 WHERE id=?").bind(id).run();
         try { await env.PIPELINE.send({runId:id,stage:"brief_options"}); } catch { /* watchdog resumes cached reading */ }
         return;
       }
@@ -100,6 +100,12 @@ export async function stageAutoDecide(env: Env, id: string): Promise<void> {
     await env.ASSETS.put(optionResultKey(id), JSON.stringify({ suggestions, warnings: request.warnings, contentRead: request.text.length > 0 }));
     await env.DB.prepare("UPDATE brief_option_jobs SET state='ready',lease_until=0 WHERE id=?").bind(id).run();
   } catch (error) {
+    if (error instanceof StageBusyError) {
+      const delay=Math.min(120,Math.max(1,error.delaySeconds));
+      await env.DB.prepare("UPDATE brief_option_jobs SET state='queued',lease_until=? WHERE id=?").bind(Date.now()+delay*1000,id).run();
+      try { await env.PIPELINE.send({runId:id,stage:"brief_options"},{delaySeconds:delay}); } catch { /* watchdog waits for the shared image reader */ }
+      return;
+    }
     if (isTransientFailure(error)) {
       const retry = await env.DB.prepare("UPDATE brief_option_jobs SET state='queued',lease_until=?,failures=failures+1 WHERE id=? AND failures<3").bind(Date.now() + 30000, id).run();
       if (retry.meta.changes) return; // watchdog retries the saved step, not the whole request

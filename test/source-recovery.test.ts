@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { campaigns, users } from "../src/db/repos";
 import { ingestSources, loadSourceReport, groundingForRun } from "../src/grounding/report";
 import { htmlToText, ingestUpload, ingestUrl, sourceExcerpt } from "../src/grounding/ingest";

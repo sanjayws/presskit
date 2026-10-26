@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { unzipSync, strFromU8 } from "fflate";
 import { sanitizeKeyPhrases } from "../src/content/validate";
 import { proposeTopics } from "../src/text/topics";

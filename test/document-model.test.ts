@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, it, expect } from "vitest";
-import { env, fetchMock, SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { extractDocumentMarkdown } from "../src/openai/extract";
 import { users, campaigns } from "../src/db/repos";
 import { ingestUpload } from "../src/grounding/ingest";

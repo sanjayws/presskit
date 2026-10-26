@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import {
   ARTICLE_TYPES,
   articleTypeByValue,

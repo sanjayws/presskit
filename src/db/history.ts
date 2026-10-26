@@ -14,13 +14,13 @@ export async function listHistory(db: D1Database, userId: string, filter: Histor
   if (filter.view !== "all") clauses.push(`r.archived_at IS ${filter.view === "active" ? "NULL" : "NOT NULL"}`);
   if (filter.group) { clauses.push("r.history_group = ?"); params.push(filter.group); }
   if (filter.search) {
-    clauses.push("(instr(lower(c.idea),lower(?)) > 0 OR EXISTS (SELECT 1 FROM articles a WHERE a.run_id=r.id AND instr(lower(a.title),lower(?)) > 0))");
+    clauses.push("(instr(lower(COALESCE(json_extract(r.brief_snapshot,'$.campaign.idea'),c.idea)),lower(?)) > 0 OR EXISTS (SELECT 1 FROM articles a WHERE a.run_id=r.id AND instr(lower(a.title),lower(?)) > 0))");
     params.push(filter.search, filter.search);
   }
   const where = clauses.join(" AND ");
   const [rows, count, groups] = await Promise.all([
-    db.prepare(`SELECT r.id,r.campaign_id,r.state,r.created_at,r.history_group,r.archived_at,c.idea,
-      COALESCE((SELECT a.title FROM articles a WHERE a.run_id=r.id ORDER BY a.id LIMIT 1),c.idea) AS title
+    db.prepare(`SELECT r.id,r.campaign_id,r.state,r.created_at,r.history_group,r.archived_at,COALESCE(json_extract(r.brief_snapshot,'$.campaign.idea'),c.idea) AS idea,
+      COALESCE((SELECT a.title FROM articles a WHERE a.run_id=r.id ORDER BY a.id LIMIT 1),json_extract(r.brief_snapshot,'$.campaign.idea'),c.idea) AS title
       FROM runs r JOIN campaigns c ON c.id=r.campaign_id WHERE ${where}
       ORDER BY r.created_at DESC,r.id DESC LIMIT ? OFFSET ?`).bind(...params, HISTORY_PAGE_SIZE, (filter.page - 1) * HISTORY_PAGE_SIZE).all<HistoryItem>(),
     db.prepare(`SELECT COUNT(*) AS n FROM runs r JOIN campaigns c ON c.id=r.campaign_id WHERE ${where}`).bind(...params).first<{n: number}>(),

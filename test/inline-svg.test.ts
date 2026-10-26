@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { env, fetchMock, SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { unzipSync, strFromU8 } from "fflate";
 import { articles, campaigns, runs, users } from "../src/db/repos";
 import { inlineImageStep, inlineKey, inlineUrl, loadInline, exportInlineHtml } from "../src/images/inline";

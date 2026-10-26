@@ -1,6 +1,6 @@
 /** Image-only jobs leave the article run ready and preserve the last good image. */
 import type { Env } from "../env";
-import { articles, campaigns, runs } from "../db/repos";
+import { articles, campaignForRun, runs } from "../db/repos";
 import { imageJobs } from "../db/image-jobs";
 import { articleImageBriefKey, imageJobPrefix } from "../images/assets";
 import { renderFeaturedVisual } from "../images/render";
@@ -26,7 +26,7 @@ export async function stageImageJob(env: Env, runId: string, articleId?: string,
   if (!owner) throw new ImageJobBusyError(Math.max(1, Math.ceil((job.lease_until - Date.now()) / 1000) + 1));
   const prefix = imageJobPrefix(articleId, jobId);
   try {
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     const pngKey = await renderFeaturedVisual(env, article, campaign, {
       pngKey: `${prefix}/featured.png`, briefKey: `${prefix}/image-brief.json`,
       sourceBriefKeys: job.mode === "retry" ? [job.source_brief_key, articleImageBriefKey(article)].filter((key): key is string => Boolean(key)) : [],

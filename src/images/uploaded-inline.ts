@@ -86,7 +86,7 @@ export async function uploadedImageStep(env: Env, article: Article, run: Run): P
   }
   for (const image of images.filter((item) => item.role==="hero")) {
     const placement=checkpoint.placements.find((p)=>p.imageId===image.id);
-    if (placement?.enhanced==="ready" && placement.selectedVariant!=="original" && article.png_r2_key===`articles/${article.id}/featured.png`) await articles.update(env.DB,article.id,{png_r2_key:enhancedImageKey(article.id,image)});
+    if (placement?.enhanced==="ready" && placement.selectedVariant!=="original" && article.png_r2_key===`articles/${article.id}/featured.png`) await articles.updateIfCurrent(env.DB,article,{png_r2_key:enhancedImageKey(article.id,image)});
   }
   let index = 0;
   const body_html = await new HTMLRewriter().on("p", { element(el) {
@@ -104,6 +104,6 @@ export async function uploadedImageStep(env: Env, article: Article, run: Run): P
     if (figures) el.after(figures, { html: true });
   } }).transform(new Response(base)).text();
   const format = isOutputFormat(article.output_format) ? article.output_format : "html";
-  await articles.update(env.DB, article.id, { body_html, output_body: isRichFormat(format) ? "" : renderOutput(body_html, format, { title: article.title, excerpt: article.excerpt, keyPhrases: [], maxWords: Number.MAX_SAFE_INTEGER }).body });
+  await articles.updateIfCurrent(env.DB, article, { body_html, output_body: isRichFormat(format) ? "" : renderOutput(body_html, format, { title: article.title, excerpt: article.excerpt, keyPhrases: [], maxWords: Number.MAX_SAFE_INTEGER }).body });
   return true;
 }

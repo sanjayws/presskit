@@ -118,7 +118,7 @@ export async function inlineImageStep(env: Env, article: Article, campaign: Camp
   }
   const body_html = await insertInline(base, article.id, manifest.slots);
   const format = isOutputFormat(article.output_format) ? article.output_format : "html";
-  await articles.update(env.DB, article.id, { body_html, output_body: isRichFormat(format) ? "" : renderOutput(body_html, format, { title: article.title, excerpt: article.excerpt, keyPhrases: [], maxWords: Number.MAX_SAFE_INTEGER }).body });
+  await articles.updateIfCurrent(env.DB, article, { body_html, output_body: isRichFormat(format) ? "" : renderOutput(body_html, format, { title: article.title, excerpt: article.excerpt, keyPhrases: [], maxWords: Number.MAX_SAFE_INTEGER }).body });
   return true;
 }
 

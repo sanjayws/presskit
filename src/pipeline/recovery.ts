@@ -4,6 +4,8 @@ import { runs, type RunState } from "../db/repos";
 import { logEvent } from "../log";
 import { loadSourceReport, sourceReportKey } from "../grounding/report";
 import { readinessKey } from "../grounding/readiness";
+import { resetFailedVisuals } from "../images/vision";
+import { runImages } from "../images/uploads";
 
 const WATCHDOG_MS = 10 * 60_000;
 export const MAX_BACKGROUND_FAILURES = 12;
@@ -121,6 +123,7 @@ export async function resumeSavedRun(env: Env, runId: string): Promise<boolean> 
   if (!owner) return false;
   try {
     if (stage === "ingest") {
+      await resetFailedVisuals(env,runImages(run));
       // A deliberate retry rereads failed sources; successful evidence stays cached.
       const loaded = (await loadSourceReport(env, runId)).filter((source) => source.status === "loaded");
       await env.ASSETS.put(sourceReportKey(runId), JSON.stringify(loaded));

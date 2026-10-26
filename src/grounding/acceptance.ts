@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { campaigns, runs, type Campaign } from "../db/repos";
+import { runs, campaignForRun, type Campaign } from "../db/repos";
 import { loadReadiness, readinessKey, type ReadinessReport } from "./readiness";
 import { loadSourceReport } from "./report";
 import { sha256Hex } from "./ingest";
@@ -19,7 +19,7 @@ export async function acceptReadiness(env: Env, runId: string, userId: string, t
   if (!owner) return false;
   try {
     const report = await loadReadiness(env, runId);
-    const campaign = await campaigns.get(env.DB, run.campaign_id);
+    const campaign = await campaignForRun(env.DB, run);
     if (!report || report.state !== "needs_input" || !campaign || token !== await readinessAcceptanceToken(report, campaign)) return false;
     if (!(await loadSourceReport(env, runId)).some((source) => source.status === "loaded")) return false;
     report.acceptance = { userId, at: new Date().toISOString(), token };

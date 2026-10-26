@@ -1,6 +1,7 @@
 import { creativeDirection } from "./image-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import {
   callMarketingSkill, marketingAgentInstructions, marketingSkillsFor,
   MARKETING_SKILLS_VERSION, MAX_MARKETING_INSTRUCTION_CHARS,

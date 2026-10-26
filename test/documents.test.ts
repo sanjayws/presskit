@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { zipSync, strToU8 } from "fflate";
 import { extractPptx, extractOfficeText, completeText } from "../src/grounding/documents";
 import { ingestUrl, htmlToText } from "../src/grounding/ingest";

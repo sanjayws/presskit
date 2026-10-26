@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { env, fetchMock, createMessageBatch } from "cloudflare:test";
+import { env, createMessageBatch } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { users, campaigns, runs } from "../src/db/repos";
 import { scheduleStage, getRecovery, recoverStalledRuns, retryInBackground, resumeSavedRun, MAX_BACKGROUND_FAILURES } from "../src/pipeline/recovery";
 import { handleQueue } from "../src/pipeline/queue";

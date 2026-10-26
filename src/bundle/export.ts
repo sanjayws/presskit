@@ -14,8 +14,13 @@ import type { Article } from "../db/repos";
 import { isOutputFormat } from "../style/engine";
 import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
+import { sha256Hex } from "../grounding/ingest";
 
-export const BUNDLE_VERSION = "visual-context-2026-10-26.1";
+export const BUNDLE_VERSION = "release-audit-2026-10-26.1";
+/** Cache identity follows saved text/metadata and the selected visual, never a static format version alone. */
+export function bundleFingerprint(article: Article): Promise<string> {
+  return sha256Hex(JSON.stringify([BUNDLE_VERSION,article.id,article.run_id,article.title,article.body_html,article.excerpt,article.slug,article.meta_desc,article.key_phrases,article.output_format,article.output_body,article.png_r2_key,article.svg_r2_key]));
+}
 
 export interface BundleMeta {
   title: string;

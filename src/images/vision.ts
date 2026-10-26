@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import type { BuildImage } from "./uploads";
 import { imageTag, MAX_IMAGE_BYTES, runImages } from "./uploads";
 import { readImage, type VisualReading } from "../openai/vision";
-import { isTransientFailure } from "../errors";
+import { isTransientFailure, StageBusyError } from "../errors";
 import type { Run } from "../db/repos";
 import type { GroundingSource } from "../grounding/evidence";
 export interface SavedVisual { version: 1; state: "pending" | "ready" | "unavailable"; attempts: number; reading?: VisualReading; error?: string }
@@ -14,30 +14,66 @@ export async function loadVisual(env: Env, image: BuildImage): Promise<SavedVisu
 export function visualBody(reading: VisualReading): string {
   return `AI visual extraction of the ORIGINAL uploaded image. Supports only what is visibly shown; not independent verification of claims, identities, feature operation or compliance.\nObservable content: ${reading.description}\nClearly visible text (transcription):\n${reading.visibleText || "No readable text is visible."}\nReading limits: ${reading.uncertainty || "No additional uncertainty reported; AI reading can still make mistakes."}`;
 }
+async function claimVisual(env: Env,image: BuildImage): Promise<string> {
+  const owner=crypto.randomUUID(),now=Date.now();
+  const claim=await env.DB.prepare(`INSERT INTO image_read_leases(asset_key,owner,lease_until) VALUES (?,?,?)
+    ON CONFLICT(asset_key) DO UPDATE SET owner=excluded.owner,lease_until=excluded.lease_until WHERE image_read_leases.lease_until<=?`)
+    .bind(image.r2_key,owner,now+120000,now).run();
+  if (!claim.meta.changes) {
+    const lease=await env.DB.prepare("SELECT lease_until FROM image_read_leases WHERE asset_key=?").bind(image.r2_key).first<{lease_until:number}>();
+    throw new StageBusyError(Math.max(1,Math.ceil(((lease?.lease_until || now+1000)-now)/1000)));
+  }
+  return owner;
+}
+const releaseVisual=(env:Env,image:BuildImage,owner:string)=>env.DB.prepare("DELETE FROM image_read_leases WHERE asset_key=? AND owner=?").bind(image.r2_key,owner).run();
+/** Explicit source retries reset only failed reads; cached successes remain free to reuse. */
+export async function resetFailedVisuals(env: Env,images:BuildImage[]): Promise<void> {
+  for (const image of images) {
+    if ((await loadVisual(env,image))?.state!=="unavailable") continue;
+    let owner:string;
+    try { owner=await claimVisual(env,image); } catch(error) { if (error instanceof StageBusyError) continue; throw error; }
+    try { if ((await loadVisual(env,image))?.state==="unavailable") await env.ASSETS.put(visualKey(image),JSON.stringify({version:1,state:"pending",attempts:0})); }
+    finally { await releaseVisual(env,image,owner); }
+  }
+}
 /** Processes at most one original per delivery, with three lifetime attempts per saved image. */
 export async function readBuildImagesStep(env: Env, images: BuildImage[]): Promise<boolean> {
   for (const image of images) {
     const saved = await loadVisual(env,image);
     if (saved?.state === "ready" || saved?.state === "unavailable") continue;
-    const checkpoint: SavedVisual = { version: 1, state: "pending", attempts: (saved?.attempts || 0)+1 };
-    await env.ASSETS.put(visualKey(image),JSON.stringify(checkpoint));
+    const owner=await claimVisual(env,image);
     try {
-      if (checkpoint.attempts > 3) throw new Error("Image reading reached its retry limit.");
+      const current=await loadVisual(env,image);
+      if (current?.state==="ready" || current?.state==="unavailable") continue;
+      // Storage faults do not spend a provider attempt or become a false source-access diagnosis.
       const original = await env.ASSETS.get(image.r2_key);
-      if (!original || original.size > MAX_IMAGE_BYTES) throw new Error("The saved image is unavailable.");
-      const reading = await readImage(env,new Uint8Array(await original.arrayBuffer()),image.content_type);
-      checkpoint.reading = reading; checkpoint.state = "ready";
-    } catch (error) {
-      if (isTransientFailure(error) && checkpoint.attempts < 3) throw error;
-      checkpoint.state = "unavailable";
-      const message = error instanceof Error ? error.message : "";
-      checkpoint.error = /401|403|OPENAI_API_KEY/.test(message) ? "Image reading could not authenticate. Ask your administrator to check the OpenAI key and image-input model access; add readable supporting text meanwhile."
-        : /429|quota|billing/i.test(message) ? "Image reading reached the OpenAI usage limit. Ask your administrator to check billing/model limits. The original is kept; add readable supporting text meanwhile."
-        : /400|404/.test(message) ? "The AI service could not process this image. Check that the configured document model supports image inputs and that the original opens correctly; try a clear PNG copy or readable supporting text."
-        : "This image could not be read reliably within the retry limit. Its original is kept. Add readable supporting text or upload a clearer crop; other available sources can still support the article.";
+      if (!original || original.size>MAX_IMAGE_BYTES) {
+        await original?.body.cancel();
+        await env.ASSETS.put(visualKey(image),JSON.stringify({version:1,state:"unavailable",attempts:current?.attempts || 0,error:"The saved original is unavailable or too large. Upload the image again or provide readable supporting text."}));
+        return false;
+      }
+      const data=new Uint8Array(await original.arrayBuffer());
+      const checkpoint: SavedVisual={version:1,state:"pending",attempts:Math.min(3,(current?.attempts || 0)+1)};
+      await env.ASSETS.put(visualKey(image),JSON.stringify(checkpoint));
+      try {
+        if ((current?.attempts || 0)>=3) throw new Error("Image reading reached its retry limit.");
+        checkpoint.reading=await readImage(env,data,image.content_type); checkpoint.state="ready";
+      } catch (error) {
+        if (isTransientFailure(error) && checkpoint.attempts<3) throw error;
+        checkpoint.state="unavailable";
+        const message=error instanceof Error ? error.message : "";
+        checkpoint.error=/401|403|OPENAI_API_KEY/.test(message) ? "Image reading could not authenticate. Ask your administrator to check the OpenAI key and image-input model access; add readable supporting text meanwhile."
+          : /429|quota|billing/i.test(message) ? "Image reading reached the OpenAI usage limit. Ask your administrator to check billing/model limits. The original is kept; add readable supporting text meanwhile."
+          : /400|404/.test(message) ? "The AI service could not process this image. Check that the configured document model supports image inputs and that the original opens correctly; try a clear PNG copy or readable supporting text."
+          : "This image could not be read reliably within the retry limit. Its original is kept. Add readable supporting text or upload a clearer crop; other available sources can still support the article.";
+      }
+      const active=await env.DB.prepare("SELECT owner FROM image_read_leases WHERE asset_key=? AND lease_until>?").bind(image.r2_key,Date.now()).first<{owner:string}>();
+      if (active?.owner!==owner) throw new StageBusyError(1);
+      await env.ASSETS.put(visualKey(image),JSON.stringify(checkpoint));
+      return false;
+    } finally {
+      await releaseVisual(env,image,owner);
     }
-    await env.ASSETS.put(visualKey(image),JSON.stringify(checkpoint));
-    return false;
   }
   return true;
 }

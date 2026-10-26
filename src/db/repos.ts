@@ -2,6 +2,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import { all, exec, execChanges, newId, now, one } from "./client";
 import { campaignImages } from "../images/uploads";
+import type { BuildImage } from "../images/uploads";
 
 // Explicit allowlists of columns a dynamic UPDATE may touch (never derive column
 // identifiers from arbitrary object keys).
@@ -15,6 +16,7 @@ const ARTICLE_UPDATABLE = new Set([
   "title", "body_html", "excerpt", "slug", "meta_desc", "key_phrases", "output_body",
   "svg_r2_key", "png_r2_key", "bundle_r2_key",
 ]);
+const ARTICLE_CONTENT = new Set(["title", "body_html", "excerpt", "slug", "meta_desc", "key_phrases", "output_body"]);
 
 function updateAllowed(
   db: D1Database,
@@ -25,7 +27,7 @@ function updateAllowed(
 ): Promise<void> {
   const keys = Object.keys(fields).filter((k) => allow.has(k));
   if (keys.length === 0) return Promise.resolve();
-  const set = keys.map((k) => `${k} = ?`).join(", ");
+  const set = [...keys.map((k) => `${k} = ?`), ...(table === "articles" && keys.some((key) => ARTICLE_CONTENT.has(key)) ? ["content_version = content_version + 1", ...(keys.includes("bundle_r2_key") ? [] : ["bundle_r2_key = NULL"])] : [])].join(", ");
   const vals = keys.map((k) => fields[k]);
   return exec(db, `UPDATE ${table} SET ${set} WHERE id = ?`, ...vals, id);
 }
@@ -90,6 +92,7 @@ export interface Run {
   generation_version?: number;
   writing_mode?: string;
   uploaded_images?: string; // immutable private asset + metadata selection
+  brief_snapshot?: string | null;
   state: RunState;
   error: string | null;
   created_at: number;
@@ -137,6 +140,31 @@ export interface Article {
   similar_score: number; // 0..1 blended similarity to that article
   output_format: string; // format this article was rendered for (default 'html')
   output_body: string; // rendered body in that format ('' for html/word: use body_html)
+  content_version?: number;
+}
+
+export interface BriefSnapshot { campaign: Campaign; uploadIds: string[]; documentIds: string[] }
+export async function captureBrief(db: D1Database, campaign: Campaign): Promise<BriefSnapshot> {
+  const [uploads, documents] = await Promise.all([
+    all<{id:string}>(db,"SELECT id FROM source_uploads WHERE campaign_id=?",campaign.id),
+    all<{id:string}>(db,"SELECT id FROM grounding_docs WHERE campaign_id=? AND kind='upload'",campaign.id),
+  ]);
+  return { campaign, uploadIds:uploads.map((row)=>row.id), documentIds:documents.map((row)=>row.id) };
+}
+export function runBriefSnapshot(run: Run): BriefSnapshot | null {
+  if (!run.brief_snapshot) return null;
+  const snapshot=JSON.parse(run.brief_snapshot) as BriefSnapshot;
+  if (snapshot.campaign?.id!==run.campaign_id || !Array.isArray(snapshot.uploadIds) || !Array.isArray(snapshot.documentIds)) throw new Error("The saved run brief is invalid.");
+  return snapshot;
+}
+/** New UI runs freeze brief/options and saved document selection. Legacy runs remain readable. */
+export async function campaignForRun(db: D1Database, run: Run): Promise<Campaign | null> {
+  const current=await campaigns.get(db,run.campaign_id);
+  if (!current) return null;
+  const snapshot=runBriefSnapshot(run);
+  if (!snapshot) return current;
+  if (snapshot.campaign.user_id!==current.user_id) throw new Error("The owner of this saved brief changed.");
+  return { ...snapshot.campaign, inline_image_count:run.inline_image_count ?? 0, generation_version:run.generation_version ?? 1, article_type:run.writing_mode || snapshot.campaign.article_type };
 }
 
 // ---- users ----------------------------------------------------------------
@@ -349,15 +377,17 @@ export const groundingDocs = {
 // ---- runs -----------------------------------------------------------------
 
 export const runs = {
-  async create(db: D1Database, campaignId: string): Promise<Run> {
-    const campaign = await campaigns.get(db, campaignId);
+  async create(db: D1Database, campaignId: string, freezeBrief: boolean | BriefSnapshot = false, selectedImages?: BuildImage[]): Promise<Run> {
+    const campaign = typeof freezeBrief==="object" ? freezeBrief.campaign : await campaigns.get(db, campaignId);
+    if (campaign && campaign.id!==campaignId) throw new Error("The saved brief belongs to a different campaign.");
     const r: Run = {
       id: newId("run"),
       campaign_id: campaignId,
       inline_image_count: campaign?.inline_image_count || 0,
       generation_version: campaign?.generation_version || 1,
       writing_mode: campaign?.article_type || "",
-      uploaded_images: JSON.stringify(await campaignImages(db, campaignId)),
+      uploaded_images: JSON.stringify(selectedImages ?? await campaignImages(db, campaignId)),
+      brief_snapshot: freezeBrief && campaign ? JSON.stringify(typeof freezeBrief==="object" ? freezeBrief : await captureBrief(db,campaign)) : null,
       state: "drafting_topics",
       error: null,
       created_at: now(),
@@ -368,7 +398,7 @@ export const runs = {
     };
     await exec(
       db,
-      "INSERT INTO runs (id, campaign_id, state, created_at, inline_image_count, generation_version, writing_mode, uploaded_images) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO runs (id, campaign_id, state, created_at, inline_image_count, generation_version, writing_mode, uploaded_images, brief_snapshot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       r.id,
       r.campaign_id,
       r.state,
@@ -377,8 +407,14 @@ export const runs = {
       r.generation_version!,
       r.writing_mode!,
       r.uploaded_images!,
+      r.brief_snapshot!,
     );
     return r;
+  },
+  /** Freeze pre-existing runs before the owner changes the shared brief or adds sources. */
+  async freezeForCampaign(db: D1Database, campaign: Campaign): Promise<void> {
+    const snapshot=JSON.stringify(await captureBrief(db,campaign));
+    await exec(db,"UPDATE runs SET brief_snapshot=? WHERE campaign_id=? AND brief_snapshot IS NULL",snapshot,campaign.id);
   },
   get(db: D1Database, id: string) {
     return one<Run>(db, "SELECT * FROM runs WHERE id = ?", id);
@@ -511,7 +547,7 @@ export const runs = {
   listForUser(db: D1Database, userId: string) {
     return all<RunHistory>(
       db,
-      `SELECT r.id, r.state, r.created_at, r.history_group, c.idea
+      `SELECT r.id, r.state, r.created_at, r.history_group, COALESCE(json_extract(r.brief_snapshot,'$.campaign.idea'),c.idea) AS idea
        FROM runs r JOIN campaigns c ON c.id = r.campaign_id
        WHERE c.user_id = ? AND r.archived_at IS NULL
        ORDER BY r.created_at DESC
@@ -668,6 +704,7 @@ function toArticleRow(input: ArticleInsert): Article {
     similar_score: input.similar_score ?? 0,
     output_format: input.output_format ?? "html",
     output_body: input.output_body ?? "",
+    content_version: 0,
   };
 }
 
@@ -766,6 +803,15 @@ export const articles = {
   },
   update(db: D1Database, id: string, fields: Partial<Article>) {
     return updateAllowed(db, "articles", id, fields, ARTICLE_UPDATABLE);
+  },
+  /** Prevent a late editor/image/bundle operation from overwriting a newer saved revision. */
+  async updateIfCurrent(db: D1Database, snapshot: Article, fields: Partial<Article>): Promise<boolean> {
+    const keys=Object.keys(fields).filter((key)=>ARTICLE_UPDATABLE.has(key));
+    if (!keys.length) return true;
+    const content=keys.some((key)=>ARTICLE_CONTENT.has(key));
+    const set=[...keys.map((key)=>`${key}=?`),...(content ? ["content_version=content_version+1",...(keys.includes("bundle_r2_key") ? [] : ["bundle_r2_key=NULL"])] : [])].join(",");
+    const guardImage=keys.includes("png_r2_key") || keys.includes("bundle_r2_key");
+    return (await execChanges(db,`UPDATE articles SET ${set} WHERE id=? AND content_version=?${guardImage ? " AND png_r2_key IS ?" : ""}`,...keys.map((key)=>fields[key as keyof Article]),snapshot.id,snapshot.content_version ?? 0,...(guardImage ? [snapshot.png_r2_key] : [])))>0;
   },
 };
 

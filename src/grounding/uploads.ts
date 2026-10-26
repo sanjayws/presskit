@@ -5,7 +5,7 @@ import { ingestUpload, uploadText } from "./ingest";
 import { isTransientFailure } from "../errors";
 import { MAX_SOURCE_BYTES, SOURCE_EXTENSIONS } from "./documents";
 export interface SourceUpload { id: string; campaign_id: string; filename: string; r2_key: string; state: string; doc_id: string | null; error: string | null }
-export async function saveSourceUpload(env: Env, campaignId: string, file: File): Promise<void> {
+export async function saveSourceUpload(env: Env, campaignId: string, file: File): Promise<string> {
   if (!SOURCE_EXTENSIONS.test(file.name) || file.size > MAX_SOURCE_BYTES) throw new Error("Use PDF, Word, Excel, PowerPoint or text files up to 10 MB.");
   const id = crypto.randomUUID();
   const extension = file.name.slice(file.name.lastIndexOf("."));
@@ -24,12 +24,13 @@ export async function saveSourceUpload(env: Env, campaignId: string, file: File)
     await env.DB.prepare("INSERT INTO source_uploads(id,campaign_id,filename,r2_key,created_at) VALUES (?,?,?,?,?)")
       .bind(id, campaignId, filename, key, Date.now()).run();
   } catch (error) { await env.ASSETS.delete(key); throw error; }
+  return id;
 }
 export async function sourceUploads(env: Env, campaignId: string): Promise<SourceUpload[]> {
   return (await env.DB.prepare("SELECT * FROM source_uploads WHERE campaign_id=? ORDER BY created_at").bind(campaignId).all<SourceUpload>()).results;
 }
-export async function extractNextUpload(env: Env, campaignId: string): Promise<boolean> {
-  const pending = (await sourceUploads(env, campaignId)).find((item) => item.state === "pending");
+export async function extractNextUpload(env: Env, campaignId: string, allowedIds?: string[]): Promise<boolean> {
+  const pending = (await sourceUploads(env, campaignId)).find((item) => item.state === "pending" && (!allowedIds || allowedIds.includes(item.id)));
   if (!pending) return false;
   try {
     const object = await env.ASSETS.get(pending.r2_key);

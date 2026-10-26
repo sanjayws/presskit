@@ -1,6 +1,7 @@
 import { stageBundle } from "../src/pipeline/run";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock, SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { unzipSync, strFromU8 } from "fflate";
 import { SEO_SKILLS_VERSION, SEO_SKILLS_COMMIT, MAX_SEO_INSTRUCTION_CHARS, seoAgentInstructions, type SeoRole } from "../src/seo/skills";
 import { articleSchemaStarter, seoDraftReview } from "../src/seo/review";

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock } from "cloudflare:test";
+import { env } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { strFromU8, unzipSync } from "fflate";
 import worker from "../src/index";
 import { users, campaigns, runs, articles, topics } from "../src/db/repos";

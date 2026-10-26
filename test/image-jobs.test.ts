@@ -1,6 +1,7 @@
 import { creativeDirection } from "./image-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { env, fetchMock, SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { articles, campaigns, runs, users } from "../src/db/repos";
 import { imageJobs } from "../src/db/image-jobs";
 import { cleanDeletedAssets } from "../src/db/history";

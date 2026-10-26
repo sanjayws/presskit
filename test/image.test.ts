@@ -1,6 +1,7 @@
 import { creativeDirection } from "./image-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { env, fetchMock, createMessageBatch } from "cloudflare:test";
+import { env, createMessageBatch } from "cloudflare:test";
+import { fetchMock } from "./network";
 import { base64ToBytes, generateImage } from "../src/openai/image";
 import { featuredImagePrompt, planFeaturedImage, validateComposition } from "../src/images/brief";
 import { RetryableError } from "../src/errors";

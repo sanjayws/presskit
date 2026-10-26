@@ -31,6 +31,8 @@ import {
 } from "./auth/google";
 import {
   campaigns,
+  campaignForRun,
+  captureBrief,
   runs,
   topics,
   articles,
@@ -39,7 +41,7 @@ import {
 import { validateGroundingUrl, uploadText } from "./grounding/ingest";
 import { enqueueBundle, enqueueWrite, resumeTopics, startRun } from "./pipeline/run";
 import { handleQueue } from "./pipeline/queue";
-import { buildBundle, BUNDLE_VERSION } from "./bundle/export";
+import { buildBundle, BUNDLE_VERSION, bundleFingerprint } from "./bundle/export";
 import { sanitizeHtml } from "./content/sanitize";
 import { canonicalizeSlug, sanitizeKeyPhrases } from "./content/validate";
 import { parseReferenceLinksText } from "./content/enrich";
@@ -524,7 +526,7 @@ app.post("/campaigns", async (c) => {
   }
   await reuseAutoImageReadings(c.env,user.id,fstr(form,"image_reading_job"),images.added.map((item)=>item.image)).catch(()=>undefined);
 
-  const run = await runs.create(c.env.DB, campaign.id);
+  const run = await runs.create(c.env.DB, campaign.id,true);
   await startRun(c.env, run.id);
   return c.redirect(`/runs/${run.id}`);
 });
@@ -562,8 +564,11 @@ app.post("/campaigns/:id", async (c) => {
   const bad = await validateSubmission(c, user.id, f, (await savedSourceDocuments(c.env, campaign.id)).filter((doc) => doc.status === "loaded" || doc.status === "pending").length, false, images.saved.length + images.added.length);
   if (bad) return bad;
 
+  const snapshot=await captureBrief(c.env.DB,campaign);
+  await runs.freezeForCampaign(c.env.DB,campaign);
+
   if (f.upload) {
-    try { await saveSourceUpload(c.env, campaign.id, f.upload); }
+    try { snapshot.uploadIds.push(await saveSourceUpload(c.env, campaign.id, f.upload)); }
     catch (error) {
       return c.text(`Supporting document: ${sourceFailureGuidance(error)}`, 400);
     }
@@ -573,7 +578,7 @@ app.post("/campaigns/:id", async (c) => {
   catch { return c.text("Could not save your images. Your brief is kept; try submitting again.", 503); }
   await reuseAutoImageReadings(c.env,user.id,fstr(form,"image_reading_job"),images.added.map((item)=>item.image)).catch(()=>undefined);
 
-  await campaigns.update(c.env.DB, campaign.id, {
+  const updates = {
     idea: f.idea,
     grounding_refs: JSON.stringify(f.urls.map((u) => ({ kind: "url", source: u }))),
     voice_profile: f.voice_profile,
@@ -596,9 +601,11 @@ app.post("/campaigns/:id", async (c) => {
     generation_version: 2,
     output_format: f.output_format,
     output_formats: JSON.stringify(f.output_formats),
-  });
+  };
+  await campaigns.update(c.env.DB, campaign.id, updates);
+  snapshot.campaign={...campaign,...updates};
 
-  const run = await runs.create(c.env.DB, campaign.id);
+  const run = await runs.create(c.env.DB, campaign.id,snapshot,[...images.saved,...images.added.map((item)=>item.image)]);
   await startRun(c.env, run.id);
   return c.redirect(`/runs/${run.id}`);
 });
@@ -699,7 +706,7 @@ app.get("/runs/:id", async (c) => {
   const readiness = await loadReadiness(c.env, run.id);
   if (run.state === "awaiting_topic_selection") {
     const list = await topics.listForRun(c.env.DB, run.id);
-    const campaign = await campaigns.get(c.env.DB, run.campaign_id);
+    const campaign = await campaignForRun(c.env.DB, run);
     return c.html(topicSelect(nav, run, list, sources, campaign?.output_format, readiness, campaign?.output_formats));
   }
   if (run.state === "ready") {
@@ -720,7 +727,7 @@ app.get("/runs/:id", async (c) => {
   const reviews = savedReviews.flatMap(({ article, checkpoint }) => checkpoint ? [{ articleId: article.id, article, checkpoint }] : []);
   const snapshot = run.state === "failed" ? await acceptanceSnapshot(savedReviews) : "";
   const readinessCampaign = run.state === "needs_input" && readiness?.state === "needs_input" && sources.some((source) => source.status === "loaded")
-    ? await campaigns.get(c.env.DB, run.campaign_id) : null;
+    ? await campaignForRun(c.env.DB, run) : null;
   const readinessToken = readinessCampaign && readiness ? await readinessAcceptanceToken(readiness, readinessCampaign) : "";
   return c.html(runProgress(nav, run, sources, reviews, readiness, snapshot, readinessToken));
 });
@@ -748,7 +755,7 @@ app.post("/runs/:id/select", async (c) => {
   // that claims the write (H-01), so overlapping runs can't clobber it.
   const formats = submittedChannels(form);
   if (formats.length > MAX_CHANNELS || formats.some((format) => !isOutputFormat(format))) return c.text(`Choose up to ${MAX_CHANNELS} valid destinations.`, 400);
-  const campaign = await campaigns.get(c.env.DB, run.campaign_id);
+  const campaign = await campaignForRun(c.env.DB, run);
   if (!campaign) return c.notFound();
   const budgetError = channelBudgetError(campaign, formats);
   if (budgetError) return c.text(budgetError, 400);
@@ -958,7 +965,10 @@ app.post("/articles/:id/uploaded-images/:imageId/presentation",bodyLimit({maxSiz
   const job=await imageJobs.get(c.env.DB,article.id);
   if (job?.state==="queued" || job?.state==="working") return c.json({error:"Wait for the current image request to finish."},409);
   let variant:unknown;
-  try { variant=(await c.req.json<{variant?:unknown}>()).variant; } catch { return c.json({error:"Choose Original or Enhanced."},400); }
+  try {
+    const payload=await c.req.json<{variant?:unknown;version?:unknown}>();variant=payload.variant;
+    if (payload.version!==undefined && payload.version!==(article.content_version ?? 0)) return c.json({error:"This draft was updated in another tab. Reopen the latest draft before choosing its image."},409);
+  } catch { return c.json({error:"Choose Original or Enhanced."},400); }
   if (variant!=="original" && variant!=="enhanced") return c.json({error:"Choose Original or Enhanced."},400);
   const checkpoint=await loadUploadedPlacements(c.env,article.id);
   const placement=checkpoint?.placements?.find((p)=>p.imageId===image.id);
@@ -973,11 +983,13 @@ app.post("/articles/:id/uploaded-images/:imageId/presentation",bodyLimit({maxSiz
   }}).transform(new Response(article.body_html)).text();
   const format=isOutputFormat(article.output_format) ? article.output_format : "html";
   const output_body=isRichFormat(format) ? "" : renderOutput(body_html,format,{title:article.title,excerpt:article.excerpt,keyPhrases:parseKeyPhrases(article.key_phrases),maxWords:Number.MAX_SAFE_INTEGER}).body;
+  const saved=await articles.updateIfCurrent(c.env.DB,article,{body_html,output_body,bundle_r2_key:null,...(image.role==="hero" ? {png_r2_key:variant==="enhanced" ? enhancedImageKey(article.id,image) : `articles/${article.id}/featured.png`} : {})});
+  if (!saved) return c.json({error:"This draft changed while the image was being selected. Reopen the latest draft and choose the image again; your newer text is kept."},409);
   placement.selectedVariant=variant;
-  await c.env.ASSETS.put(uploadedPlacementKey(article.id),JSON.stringify(checkpoint));
-  await articles.update(c.env.DB,article.id,{body_html,output_body,bundle_r2_key:null,...(image.role==="hero" ? {png_r2_key:variant==="enhanced" ? enhancedImageKey(article.id,image) : `articles/${article.id}/featured.png`} : {})});
+  try { await c.env.ASSETS.put(uploadedPlacementKey(article.id),JSON.stringify(checkpoint)); }
+  catch { console.error(JSON.stringify({event:"presentation.checkpoint_delayed",article_id:article.id})); }
   await enqueueBundle(c.env,article.run_id,article.id);
-  return c.json({ok:true,body_html,output_body,variant});
+  return c.json({ok:true,body_html,output_body,variant,version:(article.content_version ?? 0)+1});
 });
 
 app.get("/articles/:id/images/:version/:asset", async (c) => {
@@ -1001,7 +1013,7 @@ app.get("/articles/:id/bundle.zip", async (c) => {
   // Stream the precomputed bundle from R2 when available; otherwise build once.
   if (a.bundle_r2_key) {
     const obj = await c.env.ASSETS.get(a.bundle_r2_key);
-    if (obj?.customMetadata?.bundleVersion === BUNDLE_VERSION) {
+    if (obj?.customMetadata?.bundleVersion === BUNDLE_VERSION && obj.customMetadata.fingerprint===await bundleFingerprint(a)) {
       return new Response(obj.body, {
         headers: {
           "content-type": "application/zip",
@@ -1087,6 +1099,9 @@ app.post("/articles/:id", async (c) => {
     return c.json({ error: "Invalid request." }, 400);
   }
 
+  if (payload.version!==undefined && (!Number.isInteger(payload.version) || Number(payload.version)<0)) return c.json({error:"Invalid saved draft version. Reopen this article before saving."},400);
+  if (payload.version!==undefined && payload.version!==(a.content_version ?? 0)) return c.json({error:"This draft was updated in another tab. Your unsaved text is still here: copy it, reopen the latest draft and merge your edits before saving."},409);
+
   // Body: re-run the exact same allowlist sanitizer + dash strip as generation.
   const bodyIn = typeof payload.body_html === "string" ? payload.body_html : a.body_html;
   const uploadedIds = runImages(await runs.get(c.env.DB, a.run_id)).map((image) => image.id);
@@ -1103,7 +1118,7 @@ app.post("/articles/:id", async (c) => {
   const output_body = isRichFormat(format) ? "" : renderOutput(body_html, format, { title, excerpt, keyPhrases: keyPhraseList, maxWords: Number.MAX_SAFE_INTEGER }).body;
   const warnings = channelIssues({ title, body_html, meta_desc, excerpt, slug, key_phrases: keyPhraseList }, format);
 
-  await articles.update(c.env.DB, a.id, {
+  const saved=await articles.updateIfCurrent(c.env.DB, a, {
     title,
     body_html,
     meta_desc,
@@ -1112,6 +1127,7 @@ app.post("/articles/:id", async (c) => {
     key_phrases,
     output_body,
   });
+  if (!saved) return c.json({error:"This draft changed while you were saving. Your newer saved draft is kept. Copy your unsaved text, reopen the latest draft and merge your edits."},409);
 
   // Rebuild the download bundle off the HTTP path (replay-safe queue job), so
   // the save returns immediately and heavy zip work never blocks the request.
@@ -1123,14 +1139,14 @@ app.post("/articles/:id", async (c) => {
     ok: true,
     bundle: "rebuilding",
     warnings,
-    article: { title, body_html, meta_desc, excerpt, slug, key_phrases: keyPhraseList },
+    article: { title, body_html, meta_desc, excerpt, slug, key_phrases: keyPhraseList,version:(a.content_version ?? 0)+1 },
   });
 });
 
 export default {
   fetch: app.fetch,
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    await Promise.all([recoverStalledRuns(env), recoverOptionJobs(env), cleanDeletedAssets(env), env.DB.prepare("DELETE FROM login_attempts WHERE window_start<?").bind(Date.now() - 24 * 60 * 60_000).run()]);
+    await Promise.all([recoverStalledRuns(env), recoverOptionJobs(env), cleanDeletedAssets(env), env.DB.prepare("DELETE FROM login_attempts WHERE window_start<?").bind(Date.now() - 24 * 60 * 60_000).run(),env.DB.prepare("DELETE FROM image_read_leases WHERE lease_until<?").bind(Date.now()-86400000).run()]);
   },
   async queue(batch: MessageBatch<PipelineMessage>, env: Env): Promise<void> {
     await handleQueue(batch, env);

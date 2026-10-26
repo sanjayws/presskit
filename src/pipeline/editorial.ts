@@ -1,7 +1,7 @@
 /** One editor/revision call per queue message; a checkpoint precedes every hand-off. */
 import { acceptanceSnapshot, reviewFingerprint } from "../editorial/acceptance";
 import type { Env } from "../env";
-import { articles, campaigns, runs } from "../db/repos";
+import { articles, campaignForRun, runs } from "../db/repos";
 import { loadEditorial, MAX_REVISIONS, reviewArticle, reviseArticle, saveEditorial } from "../editorial/review";
 import { prepareArticle } from "../content/finalize";
 import { isRichFormat, renderOutput } from "../content/render";
@@ -75,7 +75,7 @@ export async function stageEditorial(env: Env, runId: string): Promise<void> {
         continue;
       }
       if (!checkpoint.input.groundingSources) {
-        const campaign = await campaigns.get(env.DB, run.campaign_id);
+        const campaign = await campaignForRun(env.DB, run);
         if (!campaign) throw new Error("The campaign for this saved draft is missing");
         const evidence = await groundingEvidenceForRun(env, campaign, runId);
         checkpoint.input.groundingSources = evidence.sources;

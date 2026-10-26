@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import type { Campaign } from "../db/repos";
-import { campaigns, groundingDocs, runs } from "../db/repos";
+import { campaigns, groundingDocs, runs, runBriefSnapshot } from "../db/repos";
 import { loadVisual, visualSources } from "../images/vision";
 import { runImages, imageTag } from "../images/uploads";
 import { sourcePrompt } from "./evidence";
@@ -34,7 +34,9 @@ export function sourceFailureGuidance(error: unknown): string {
 }
 
 export async function ingestSources(env: Env, campaign: Campaign, runId: string): Promise<boolean> {
-  if (await extractNextUpload(env, campaign.id)) return false;
+  const run=await runs.get(env.DB,runId);
+  const snapshot=run ? runBriefSnapshot(run) : null;
+  if (await extractNextUpload(env, campaign.id,snapshot?.uploadIds)) return false;
   const results: SourceResult[] = [];
   const previous = await loadSourceReport(env, runId);
   const urls = [...new Set([...campaigns.refs(campaign).filter((ref) => ref.kind === "url").map((ref) => ref.source), ...readReferenceLinks(campaign.reference_links).map((ref) => ref.url)])];
@@ -62,9 +64,11 @@ export async function ingestSources(env: Env, campaign: Campaign, runId: string)
     if (failure) results.push({ source: url, status: "unavailable", message: sourceFailureGuidance(failure) });
     await env.ASSETS.put(sourceReportKey(runId), JSON.stringify(results));
   }
-  const uploads = (await groundingDocs.listForCampaign(env.DB, campaign.id)).filter((doc) => doc.kind === "upload");
+  const selectedUploads=(await sourceUploads(env,campaign.id)).filter((upload)=>!snapshot || snapshot.uploadIds.includes(upload.id));
+  const allowedDocs=snapshot ? new Set([...snapshot.documentIds,...selectedUploads.flatMap((upload)=>upload.doc_id ? [upload.doc_id] : [])]) : null;
+  const uploads = (await groundingDocs.listForCampaign(env.DB, campaign.id)).filter((doc) => doc.kind === "upload" && (!allowedDocs || allowedDocs.has(doc.id)));
   for (const doc of uploads) results.push({ source: doc.source, status: "loaded", message: "Supporting document.", docId: doc.id });
-  for (const upload of await sourceUploads(env, campaign.id)) {
+  for (const upload of selectedUploads) {
     if (upload.state === "unavailable") results.push({ source: upload.filename, status: "unavailable", message: upload.error || "Document unavailable." });
   }
   for (const image of runImages(await runs.get(env.DB,runId))) {
