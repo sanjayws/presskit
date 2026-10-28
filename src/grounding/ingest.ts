@@ -342,7 +342,7 @@ export async function loadGroundingEvidence(
   // Number each source with a stable [S1..Sn] id so the model can attribute
   // facts to a specific source (no markers are printed in the article; the ids
   // just keep sources distinct and reduce cross-source blending/hallucination).
-  const sources = parts.map((p, i) => ({ id: `S${i + 1}`, label: `${p.kind === "url" ? "url" : "document"}: ${p.source}`, body: sourceExcerpt(p.text, perSource, options.query || "") }));
+  const sources = parts.map((p, i) => ({ id: `S${i + 1}`, label: `${p.kind === "url" ? "url" : "document"}: ${p.source}`, body: sourceExcerpt(p.text, perSource, options.query || ""), ...(p.kind==="url" ? {url:p.source} : {}) }));
   return { text: sourcePrompt(sources), sources };
 }
 

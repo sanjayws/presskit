@@ -22,6 +22,7 @@ import type { OutputFormat } from "../style/engine";
 import { marketingAgentInstructions } from "../marketing/skills";
 import { sha256Hex } from "../grounding/ingest";
 import type { GroundingSource } from "../grounding/evidence";
+import { referenceInstructions, type EvidenceReference } from "../content/evidence-links";
 
 export interface GeneratedArticle {
   title: string;
@@ -111,6 +112,7 @@ export interface ArticleInput {
   maxWords: number;
   groundingText: string;
   groundingSources?: GroundingSource[];
+  evidenceReferences?: EvidenceReference[];
   /** Optional editorial controls (owner-supplied). */
   includeIdeas?: string;
   excludeIdeas?: string;
@@ -165,6 +167,7 @@ export function editorialBlock(input: ArticleInput): string {
     parts.push(`Must avoid as optional topics (owner preference, never conceal or contradict a material limitation): ${JSON.stringify(exc)}`);
   }
   parts.push(biasInstruction(input.biasLevel ?? 3));
+  parts.push(referenceInstructions(input.evidenceReferences,input.outputFormat));
   return parts.join("\n");
 }
 

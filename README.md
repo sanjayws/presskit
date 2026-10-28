@@ -161,6 +161,14 @@ Each new run keeps its own brief settings, selected uploads and image metadata. 
 
 Saved articles use revision checks: if another tab changes the draft, saving or selecting an image asks you to reopen and merge instead of overwriting the newer text. Typing during a save stays in the editor as unsaved work. ZIP downloads check their cache against the current saved text and selected hero; a delayed or unavailable rebuild queue does not return an older draft or undo a successful save.
 
+## Automatic public references
+
+New writing runs can reuse URLs discovered in angle research and optional writing research. Presskit extracts up to two additional public pages, then makes one optional, checkpointed assessment of relevance, neutrality and competing product promotion. It favours independent educational articles, Wikipedia, regulators, standards and academic sources. Search snippets, inaccessible pages and private uploads do not become public evidence links. The assessment uses AI judgment; review the actual sources before publishing. Neutral background evidence cannot substantiate product-specific performance, compliance or customer results.
+
+The writer links supported claims to approved exact URLs. Application code removes uncatalogued model-generated links and adds a **References** block containing only research sources used in that output; owner-supplied reference links and CTA links retain their existing behaviour. Independent review checks claim-to-source mappings. Rich articles use up to two research references; email/LinkedIn/social/chat use at most one short reference, with a compact References block and existing word/character limits. Unsuitable sources, very long URLs or insufficient word budgets can leave no automatic references. Fiction receives none by default.
+
+HTML/Word retain href links, Markdown uses link syntax, and plain/social/chat exports include actual URLs. Research is shared across destinations, reference use is per output, and cached steps avoid repeated calls. The screening adds at most one model request per new research context and is optional: provider failure does not discard the draft. Previously finished articles and existing writing checkpoints keep their previous reference behaviour. No extra key, binding or migration is required. See **Help → References** in the app.
+
 ## SEO guidance and publishing
 
 Website/article outputs get an optional **SEO & publishing suggestions** panel

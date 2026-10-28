@@ -3,6 +3,8 @@ import { runImages } from "../images/uploads";
 import { uploadedImageStep } from "../images/uploaded-inline";
 import { readBuildImagesStep, imageNarrativeContext } from "../images/vision";
 import { creativeContextStep } from "../grounding/creative";
+import { evidenceReferences } from "../grounding/research-references";
+import { referencesForChannel, referenceReserveWords } from "../content/evidence-links";
 import { acceptedGapsGuidance } from "../editorial/accepted-gaps";
 import { selectedChannels } from "../style/channels";
 /**
@@ -206,6 +208,7 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
     }
     // Research may have added source records on a previous delivery.
     evidence = await groundingEvidenceForRun(env, campaign, runId);
+    const researchReferences=await evidenceReferences(env,runId,evidence.sources);
     const readiness = await loadReadiness(env, runId);
     const grounding = evidence.text;
     const voice = voiceInstruction(campaign.voice_profile);
@@ -239,7 +242,11 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
       const effWords = Math.min(campaign.max_words, channelProfile(outputFormat).maxWords);
       const formatGuidance = formatWriterGuidance(outputFormat);
       const progressId = formats.length > 1 ? `${topic.id}:${outputFormat}` : topic.id;
-      const reserve = enrichmentReserveWords(referenceLinks, cta, isCampaignChannel(outputFormat)) + countWords(campaign.signature);
+      let publicReferences=researchReferences===undefined ? undefined : referencesForChannel(researchReferences,outputFormat);
+      const fixedReserve = enrichmentReserveWords(referenceLinks, cta, isCampaignChannel(outputFormat)) + countWords(campaign.signature);
+      // Optional references yield to the owner's message budget, never create a new writing gate.
+      if (effWords-fixedReserve-referenceReserveWords(publicReferences || [])<(outputFormat==="chat" ? 30 : 80)) publicReferences=[];
+      const reserve = fixedReserve+referenceReserveWords(publicReferences || []);
       if (effWords - reserve < (outputFormat === "chat" ? 30 : 80)) throw new Error("The links, call to action and signature leave too little space. Increase the word limit or shorten them.");
       const input = {
         originalBrief: campaign.idea,
@@ -256,7 +263,8 @@ export async function stageWrite(env: Env, runId: string): Promise<void> {
         temperature,
         maxWords: effWords - reserve,
         groundingText: grounding,
-        groundingSources: evidence.sources,
+        groundingSources: researchReferences===undefined ? evidence.sources.map(({url:_url,...source})=>source) : evidence.sources,
+        ...(publicReferences===undefined ? {} : {evidenceReferences:publicReferences}),
         includeIdeas: campaign.include_ideas,
         excludeIdeas: campaign.exclude_ideas,
         biasLevel: campaign.bias_level,

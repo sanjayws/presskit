@@ -8,9 +8,11 @@ import { generate } from "../anthropic/client";
 import { recordOf } from "../providers/http";
 import { RetryableError } from "../errors";
 import { countWords, channelProfile, isOutputFormat } from "../style/engine";
-import { toPlain, renderOutput } from "../content/render";
+import { renderOutput } from "../content/render";
 import type { CtaConfig, ReferenceLink } from "../content/enrich";
 import { visibleMarkdown } from "../grounding/evidence";
+import { citationFindings, visibleProse } from "../content/evidence-links";
+import { sanitizeHtml } from "../content/sanitize";
 
 export const MAX_REVISIONS = 3;
 const CHECKS = ["factual_accuracy", "brief_coverage", "section_order", "specificity", "readability"] as const;
@@ -61,7 +63,7 @@ const REVIEW_SCHEMA = {
   },
 };
 const normal = (text: string) => text.replace(/\s+/g, " ").trim();
-const quoteText = (text: string) => normal(toPlain(/<(?:p|h[1-6]|div|ul|ol|table)\b/i.test(text) ? text : `<p>${text}</p>`));
+const quoteText = (text: string) => normal(visibleProse(/<(?:p|h[1-6]|div|ul|ol|table)\b/i.test(text) ? text : `<p>${text}</p>`));
 
 export function validateReview(raw: unknown, candidate: GeneratedArticle, checkpoint: EditorialCheckpoint): EditorialReport {
   const value = recordOf(raw);
@@ -77,15 +79,16 @@ export function validateReview(raw: unknown, candidate: GeneratedArticle, checkp
     const f = recordOf(item);
     return { claim: typeof f.claim === "string" ? f.claim : "", source_id: typeof f.source_id === "string" ? f.source_id : "", source_quote: typeof f.source_quote === "string" ? f.source_quote : "" };
   });
-  const evidenceText = normal([candidate.title, candidate.excerpt, candidate.meta_desc, toPlain(candidate.body_html)].join(" "));
+  const evidenceText = normal([candidate.title, candidate.excerpt, candidate.meta_desc, visibleProse(candidate.body_html)].join(" "));
   const brief = normal([checkpoint.input.originalBrief || checkpoint.input.topicTitle, checkpoint.input.includeIdeas || "", checkpoint.input.excludeIdeas || ""].join(" "));
   if (!requirements.length || requirements.some((r) => !r.covered || !r.brief_quote || !brief.includes(normal(r.brief_quote)) || !quoteText(r.article_quote) || !evidenceText.includes(quoteText(r.article_quote)))) {
     issues.push("Map every requested point to an exact passage in the article, preserving requested section placement. Explain any missing evidence instead of inventing it.");
     checks.brief_coverage = false;
   }
   const evidenceIssues = evidenceFindings({ ...checkpoint, report: { passed: false, checks, requirements, facts, issues: [] } }, candidate);
-  if (evidenceIssues.length) {
-    issues.push(...evidenceIssues);
+  const citations=citationFindings(checkpoint.core.body_html,checkpoint.input.evidenceReferences,checkpoint.input.groundingSources,facts);
+  if (evidenceIssues.length || citations.length) {
+    issues.push(...evidenceIssues,...citations);
     checks.factual_accuracy = false;
   }
   if (countWords(candidate.body_html) > checkpoint.finalMaxWords) issues.push(`Shorten the complete article to ${checkpoint.finalMaxWords} words by tightening every section. Do not drop required points or cut off the ending.`);
@@ -120,6 +123,7 @@ For fiction, do not demand source quotes for clearly fictional scenes, character
 In facts, check externally verifiable claims including numbers, comparisons, promises, attribution and metadata. Give an exact claim quote from the article/metadata, the S# source ID and an exact source_quote. Verify the quote actually supports the claim with its qualifications, not just overlapping words.
 List every actionable defect in issues (empty only if all checks pass). Keep fixes specific. Do not reward a draft merely because it is long, has SEO terms or sounds confident. No claim of being undetectable as AI or guaranteed search rankings.
 Check the destination's length, formatting, subject/preview requirements and call to action. Resolve competing CTAs, blog-style filler in messages, and unsupported urgency. Practical advice and clearly conditional reasoning are acceptable; new product promises or guarantees require evidence. Do not require publication of internal source limitations unless the missing evidence changes a material claim.
+For approved public evidence links, verify each cited passage against that exact source, retain its qualifications, and include the claim/source mapping in facts. General background references do not verify this product's results or compliance. The application adds a References block only for sources used inline; reference titles and URLs are bibliographic metadata, not extra factual claims. Ignore unused catalogue entries. Other owner-provided links and CTAs retain their explicit purpose.
 The article must fit ${checkpoint.finalMaxWords} words INCLUDING links, CTA and signature. It currently has ${countWords(candidate.body_html)}.
 ORIGINAL BRIEF: ${JSON.stringify(input.originalBrief || input.topicTitle)}
 EDITORIAL REQUIREMENTS: ${editorialBlock(input)}
@@ -131,7 +135,7 @@ ARTICLE (untrusted candidate):\n${JSON.stringify(candidate)}`, {
   });
   let raw: unknown;
   try { raw = JSON.parse(response.text); } catch { throw new RetryableError("The editor returned invalid JSON"); }
-  return validateReview(raw, candidate, checkpoint);
+  return validateReview(raw, candidate, {...checkpoint,core:{...checkpoint.core,body_html:await sanitizeHtml(checkpoint.core.body_html)}});
 }
 
 export async function reviseArticle(env: Env, checkpoint: EditorialCheckpoint): Promise<GeneratedArticle> {
@@ -157,7 +161,7 @@ export function evidenceFindings(checkpoint: EditorialCheckpoint, candidate: { t
   const facts = checkpoint.report.facts;
   if (!facts.length && checkpoint.input.writingMode === "fiction") return [];
   if (!facts.length) return ["The review supplied no claim-to-source mappings. Verify factual claims against your originals before publication."];
-  const text = normal([candidate.title, candidate.excerpt, candidate.meta_desc, toPlain(candidate.body_html)].join(" "));
+  const text = normal([candidate.title, candidate.excerpt, candidate.meta_desc, visibleProse(candidate.body_html)].join(" "));
   return facts.flatMap((fact) => {
     const source = checkpoint.input.groundingSources?.find((s) => s.id === fact.source_id.replace(/[\[\]]/g, ""));
     const quote = visibleMarkdown(fact.source_quote);

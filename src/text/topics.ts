@@ -1,4 +1,5 @@
 import { seoAgentInstructions, type SeoContext } from "../seo/skills";
+import { saveDiscoveredSources } from "../grounding/research-references";
 /** Grounded topic proposal using Anthropic web search for reader intent.
  * Search does not silently add factual evidence to the writer's source set.
  */
@@ -87,11 +88,13 @@ export async function proposeTopics(
   groundingSummary: string,
   researchGuidance = "",
   seoContext: SeoContext = {},
+  researchRunId?: string,
 ): Promise<ProposedTopic[]> {
   const res = await generate(env, buildPrompt(idea, groundingSummary, researchGuidance), {
     webSearch: true,
     systemInstruction: `${SYSTEM}\n\n${marketingAgentInstructions("topic-research")}\n\n${seoAgentInstructions("research", seoContext)}`,
   });
+  if (researchRunId) await saveDiscoveredSources(env,researchRunId,res.sources);
 
   const raw = extractJson<any[]>(res.text);
   if (!Array.isArray(raw)) throw new Error("topics reply was not an array");
@@ -146,7 +149,7 @@ export async function generateTopicsForRun(
     attempt < MAX_TOPIC_ATTEMPTS && dedupeDistinct(collected).length < REQUIRED_TOPICS;
     attempt++
   ) {
-    collected.push(...(await proposeTopics(env, idea, groundingSummary, researchGuidance, seoContext)));
+    collected.push(...(await proposeTopics(env, idea, groundingSummary, researchGuidance, seoContext, runId)));
   }
 
   const distinct = dedupeDistinct(collected);

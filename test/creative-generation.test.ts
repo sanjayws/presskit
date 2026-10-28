@@ -112,6 +112,8 @@ describe("creative and fictional planning", () => {
     await creativeContextStep(env, f.run.id, f.campaign, fact);
     fetchMock.get("https://public.example").intercept({ path: "/pilot-guide" }).reply(200, fact, { headers: { "content-type": "text/plain" } });
     await creativeContextStep(env, f.run.id, f.campaign, fact);
+    reply({assessments:[{url,neutral:true,non_competing:true,relevant:true,label:"Pilot guide",source_quote:fact}]});
+    await creativeContextStep(env,f.run.id,f.campaign,fact);
     expect(await creativeContextStep(env, f.run.id, f.campaign, fact)).toContain("Useful planning context");
     expect((await groundingEvidenceForRun(env, f.campaign, f.run.id)).sources[0]?.body).toContain(fact);
   });
