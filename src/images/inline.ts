@@ -34,7 +34,7 @@ export async function loadInline(env: Env, id: string): Promise<InlineManifest |
   const value = await object.json<InlineManifest>();
   if (value.version !== 1 || !Array.isArray(value.slots) || value.slots.length > 3 || value.slots.some((s) => !Number.isInteger(s.afterParagraph) || s.afterParagraph < 1 || typeof s.alt !== "string" || s.alt.length > 240 || typeof s.prompt !== "string" || s.prompt.length > 4000 || !["pending", "ready", "failed"].includes(s.state) || !Number.isInteger(s.attempts) || (s.kind !== undefined && !["png", "svg"].includes(s.kind)) || (s.sourceText !== undefined && (typeof s.sourceText !== "string" || s.sourceText.length > 6000)))) throw new Error("Invalid inline image checkpoint");
   for (const slot of value.slots) if (slot.diagram) validateDiagram(slot.diagram, slot.sourceText || "");
-  for (const slot of value.slots) if (slot.rasterAttempts!==undefined && (!Number.isInteger(slot.rasterAttempts) || slot.rasterAttempts<0 || slot.rasterAttempts>4)) throw new Error("Invalid PNG conversion checkpoint");
+  for (const slot of value.slots) if (slot.rasterAttempts!==undefined && (!Number.isInteger(slot.rasterAttempts) || slot.rasterAttempts<0)) throw new Error("Invalid PNG conversion checkpoint");
   for (const slot of value.slots) if ([slot.width, slot.height].some((n) => n !== undefined && (!Number.isInteger(n) || n < 1 || n > 8192))) throw new Error("Invalid inline image dimensions");
   return value;
 }
@@ -90,7 +90,7 @@ export async function inlineImageStep(env: Env, article: Article, campaign: Camp
       slot.state = "ready";
       if (kind==="svg" && article.output_format==="html") {
         slot.state="pending";
-        slot.rasterAttempts=(slot.rasterAttempts || 0)+1;await save(env,article.id,manifest);
+        slot.rasterAttempts=Math.min(4,(slot.rasterAttempts || 0)+1);await save(env,article.id,manifest);
         try {
           const png=await ensureInlinePng(env,article.id,index+1,slot.rasterAttempts<=3);await png.body.cancel();slot.state="ready";
         } catch(error) {

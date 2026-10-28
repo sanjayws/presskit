@@ -91,8 +91,10 @@ describe("WordPress SVG to PNG conversion",()=>{
   });
   it("finishes a pending WordPress diagram as PNG and recovers an interrupted successful conversion",async()=>{
     const f=await fixture();await (await ensureInlinePng(f.bindings,f.article.id,1)).body.cancel();
-    f.manifest.slots[0]!.state="pending";f.manifest.slots[0]!.rasterAttempts=3;await env.ASSETS.put(`articles/${f.article.id}/inline-images/manifest.json`,JSON.stringify(f.manifest));
-    expect(await inlineImageStep(f.bindings,f.article,f.campaign)).toBe(false);expect((await loadInline(f.bindings,f.article.id))?.slots[0]?.state).toBe("ready");
+    for (const interruptedCount of [3,4,5]) {
+      f.manifest.slots[0]!.state="pending";f.manifest.slots[0]!.rasterAttempts=interruptedCount;await env.ASSETS.put(`articles/${f.article.id}/inline-images/manifest.json`,JSON.stringify(f.manifest));
+      expect(await inlineImageStep(f.bindings,f.article,f.campaign)).toBe(false);const saved=(await loadInline(f.bindings,f.article.id))!;expect(saved.slots[0]?.state).toBe("ready");expect(saved.slots[0]?.rasterAttempts).toBe(4);
+    }
     expect(await inlineImageStep(f.bindings,(await articles.get(env.DB,f.article.id))!,f.campaign)).toBe(true);expect((await articles.get(env.DB,f.article.id))?.body_html).toContain(inlineUrl(f.article.id,1));expect(f.quickAction).toHaveBeenCalledOnce();
   });
   it("bounds new-generation conversion failures while preserving the article",async()=>{
