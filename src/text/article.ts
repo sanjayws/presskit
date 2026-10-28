@@ -22,7 +22,7 @@ import type { OutputFormat } from "../style/engine";
 import { marketingAgentInstructions } from "../marketing/skills";
 import { sha256Hex } from "../grounding/ingest";
 import type { GroundingSource } from "../grounding/evidence";
-import { referenceInstructions, type EvidenceReference } from "../content/evidence-links";
+import { referenceInstructions, ownerReferenceUrls, type EvidenceReference } from "../content/evidence-links";
 
 export interface GeneratedArticle {
   title: string;
@@ -168,6 +168,8 @@ export function editorialBlock(input: ArticleInput): string {
   }
   parts.push(biasInstruction(input.biasLevel ?? 3));
   parts.push(referenceInstructions(input.evidenceReferences,input.outputFormat));
+  const ownerUrls=input.evidenceReferences===undefined ? [] : ownerReferenceUrls(input.originalBrief || "",[],null);
+  if (ownerUrls.length) parts.push(`Explicit owner URLs (not neutral evidence references): ${JSON.stringify(ownerUrls)}. Use only where requested by the owner. Keep their intended destination and purpose; do not present them as independent evidence or add them to the automatic References block.`);
   return parts.join("\n");
 }
 

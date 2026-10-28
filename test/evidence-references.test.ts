@@ -7,7 +7,7 @@ import { ingestUpload, ingestUrl } from "../src/grounding/ingest";
 import { sourceReportKey, groundingEvidenceForRun } from "../src/grounding/report";
 import { creativeContextStep } from "../src/grounding/creative";
 import { saveDiscoveredSources, discoveredSources, evidenceReferences, creativeContextKey, curateResearchReferences, researchCandidates } from "../src/grounding/research-references";
-import { applyEvidenceLinks, referencesForChannel, citationFindings, type EvidenceReference } from "../src/content/evidence-links";
+import { applyEvidenceLinks, referencesForChannel, citationFindings, ownerReferenceUrls, type EvidenceReference } from "../src/content/evidence-links";
 import { prepareArticle } from "../src/content/finalize";
 import { toMarkdown, toPlain } from "../src/content/render";
 import { validateReview, type EditorialCheckpoint } from "../src/editorial/review";
@@ -67,6 +67,10 @@ describe("published citations and exports",()=>{
   it("keeps owner links and CTA while publishing no invented upload URL",async()=>{
     const candidate=await prepareArticle({...core,body_html:'<p><a href="https://invented.example/upload.pdf">Owner notes</a></p>'},{...options,referenceLinks:[{url:"https://owner.example/pricing",label:"Owner pricing"}]});
     expect(candidate.body_html).toContain("https://owner.example/pricing");expect(candidate.body_html).not.toContain("https://invented.example");expect(candidate.body_html).not.toContain("<h3>References</h3>");
+    const ownerUrls=ownerReferenceUrls("Invite readers to https://owner.example/start. See (https://owner.example/guide).",[],null);
+    expect(ownerUrls).toEqual(["https://owner.example/start","https://owner.example/guide"]);
+    const requested=await prepareArticle({...core,body_html:'<p><a href="https://owner.example/start#signup">Start here</a></p>'},{...options,input:{...input,originalBrief:"Link to https://owner.example/start#signup"}});
+    expect(requested.body_html).toContain('href="https://owner.example/start#signup"');expect(requested.body_html).not.toContain("<h3>References</h3>");
   });
   it("uses one compact reference without repeating its URL inline or inserting channel headings",async()=>{
     const candidate=await prepareArticle(core,{...options,input:{...input,outputFormat:"chat"}});

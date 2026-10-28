@@ -15,6 +15,15 @@ export function publicReferenceUrl(value: string): string | null {
     return url.href;
   } catch { return null; }
 }
+/** Explicit owner URLs retain their purpose; they are not neutral research endorsements. */
+export function ownerReferenceUrls(brief:string,links:string[],ctaUrl:string|null):string[] {
+  const mentioned=(brief.match(/https?:\/\/[^\s<>"']+/gi) || []).map(value=>{
+    let url=value.replace(/[.,;!]+$/,"");
+    while (url.endsWith(")") && (url.match(/\)/g)||[]).length>(url.match(/\(/g)||[]).length) url=url.slice(0,-1);
+    return url;
+  });
+  return [...new Set([...links,...(ctaUrl ? [ctaUrl] : []),...mentioned].flatMap(value=>{const url=publicReferenceUrl(value);return url ? [url] : [];}))].slice(0,30);
+}
 export function referencesForChannel(references: EvidenceReference[],format?: OutputFormat): EvidenceReference[] {
   const compact=isCampaignChannel(format),limit=compact ? 1 : 2;
   const maxLength=compact ? Math.min(300,Math.floor((channelProfile(format || "html").maxCharacters || 3000)/10)) : 2048;
@@ -38,12 +47,12 @@ Use a relevant catalogue source only when its extracted evidence actually suppor
 Application code adds a References block listing only catalogue sources linked in the core. Do not write that block yourself or duplicate owner reference links, CTA or signature. ${compact ? `Use at most one short reference; its URL appears in the final References block. ${textOnly ? "Inline anchor text remains plain text in this channel, avoiding a repeated URL." : "Keep the inline evidence link clickable in the email."} Reserve room for the References block in the channel's character limit.` : "Use at most two relevant references, woven naturally into the supported passages."}`;
 }
 /** Called on sanitized CORE only, before owner links and CTA are added. */
-export async function applyEvidenceLinks(html: string,references: EvidenceReference[],format?: OutputFormat): Promise<{body:string;block:string}> {
+export async function applyEvidenceLinks(html: string,references: EvidenceReference[],format?: OutputFormat,ownerUrls:string[]=[]): Promise<{body:string;block:string}> {
   const catalogue=referencesForChannel(references,format),used=new Set<string>();
   const body=await new HTMLRewriter().on("a",{element(el){
     const href=publicReferenceUrl(el.getAttribute("href") || "");
     const ref=catalogue.find(item=>item.url===href);
-    if (!ref) { el.removeAndKeepContent(); return; }
+    if (!ref) { if (!href || !ownerUrls.includes(href)) el.removeAndKeepContent(); return; }
     used.add(ref.url);
     if (["chat","social","linkedin"].includes(format || "")) el.removeAndKeepContent();
     else el.setAttribute("href",ref.url);
