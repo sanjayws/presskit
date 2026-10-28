@@ -19,7 +19,7 @@ function reply(value: unknown, body?: (value: string) => boolean) {
   fetchMock.get("https://api.anthropic.com").intercept({ path: "/v1/messages", method: "POST", ...(body ? { body } : {}) })
     .reply(200, { type: "message", role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(value) }] });
 }
-async function fixture(format = "html") {
+async function fixture(format = "markdown") {
   const user = await users.upsertByEmail(env.DB, "dev@example.com");
   const campaign = await campaigns.create(env.DB, { user_id: user.id, idea: "Explain the pilot process", grounding_refs: [], inline_image_count: 1 });
   const run = await runs.create(env.DB, campaign.id);
@@ -66,7 +66,7 @@ describe("native inline SVG diagrams", () => {
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const files = unzipSync(await buildBundle(env, article));
     expect(files["inline-1.svg"]).toBeTruthy(); expect(files["inline-1.png"]).toBeUndefined();
-    expect(strFromU8(files["article.html"]!)).toContain('src="inline-1.svg"');
+    expect(strFromU8(files["article.md"]!)).toContain("](inline-1.svg)");
     expect(strFromU8(files["inline-1.svg"]!)).toContain("Assess the network");
     const save = await SELF.fetch(`https://x.test/articles/${article.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body_html: article.body_html, key_phrases: "pilot" }) });
     expect(save.status).toBe(200);

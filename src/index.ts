@@ -4,6 +4,7 @@ import { loadUploadedPlacements, uploadedPlacementKey } from "./images/uploaded-
 import { loadVisual, visualBody, reuseAutoImageReadings } from "./images/vision";
 import { optionJobKey, optionResultKey, recoverOptionJobs, type OptionRequest } from "./editorial/auto-decide";
 import { exportInlineHtml, inlineKey, loadInline } from "./images/inline";
+import { ensureInlinePng, PngConversionError, PngConversionBusyError } from "./images/svg-png";
 import { acceptReadiness, readinessAcceptanceToken } from "./grounding/acceptance";
 import { channelBudgetError } from "./content/channel-budget";
 import { MAX_CHANNELS, submittedChannels } from "./style/channels";
@@ -97,6 +98,10 @@ function contentSecurityPolicy(nonce: string): string {
 
 // Global error handler: never leak internals; log a safe diagnostic.
 app.onError((err, c) => {
+  if (err instanceof PngConversionError || err instanceof PngConversionBusyError) {
+    c.header("Retry-After","3");
+    return c.text(err instanceof PngConversionError ? err.message : "PNG conversion is already running. Try again shortly; your original diagram and article are kept.",503);
+  }
   console.error(JSON.stringify({ event: "unhandled_error", path: c.req.path, msg: err.message }));
   return c.text("Something went wrong. Please try again.", 500);
 });
@@ -925,7 +930,9 @@ app.get("/articles/:id/inline-images/:file", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
   const slot = /^([1-3])\.(png|svg)$/.exec(c.req.param("file"));
   if (!article || !slot) return c.notFound();
-  const object = await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg"));
+  const manifest=slot[2]==="png" && article.output_format==="html" ? await loadInline(c.env,article.id) : null;
+  const original=manifest?.slots[Number(slot[1])-1];
+  const object = original?.kind==="svg" && original.state==="ready" ? await ensureInlinePng(c.env,article.id,Number(slot[1])) : await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg"));
   if (!object) return c.notFound();
   return new Response(object.body, { headers: { "content-type": slot[2] === "svg" ? "image/svg+xml" : "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
 });

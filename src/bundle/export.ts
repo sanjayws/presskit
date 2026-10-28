@@ -2,7 +2,7 @@ import { articleSchemaStarter, seoDraftReview } from "../seo/review";
 import { runs } from "../db/repos";
 import { imageExtension, runImages, uploadedImageFile, MAX_IMAGE_BYTES, enhancedImageKey, enhancedImageFile, imageTag } from "../images/uploads";
 import { loadVisual, visualBody } from "../images/vision";
-import { exportInlineHtml, loadInline, inlineKey, inlineKind } from "../images/inline";
+import { exportInlineHtml, loadInline, inlineAsset, inlineAssetKind } from "../images/inline";
 /**
  * "Download all" bundle. Includes the chosen article format, metadata, and
  * available featured PNG/creative brief. Nothing leaves the app except by the user's
@@ -16,7 +16,7 @@ import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
 import { sha256Hex } from "../grounding/ingest";
 
-export const BUNDLE_VERSION = "release-audit-2026-10-26.1";
+export const BUNDLE_VERSION = "wordpress-inline-png-2026-10-28.1";
 /** Cache identity follows saved text/metadata and the selected visual, never a static format version alone. */
 export function bundleFingerprint(article: Article): Promise<string> {
   return sha256Hex(JSON.stringify([BUNDLE_VERSION,article.id,article.run_id,article.title,article.body_html,article.excerpt,article.slug,article.meta_desc,article.key_phrases,article.output_format,article.output_body,article.png_r2_key,article.svg_r2_key]));
@@ -62,6 +62,7 @@ function escapeHtml(s: string): string {
 
 /** Assemble the zip bytes for one article. Fetches private assets from R2. */
 export async function buildBundle(env: Env, article: Article): Promise<Uint8Array> {
+  const savedArticle=article;
   article = { ...article, body_html: await exportInlineHtml(env, article, true) };
   const format = isOutputFormat(article.output_format) ? article.output_format : "html";
   const phrases = safeArray(article.key_phrases);
@@ -125,10 +126,10 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
   const inline = await loadInline(env, article.id);
   for (const [i, slot] of (inline?.slots || []).entries()) {
     if (slot.state !== "ready") continue;
-    const object = await env.ASSETS.get(inlineKey(article.id, i + 1, inlineKind(slot)));
-    if (object && object.size <= 6000000) files[`inline-${i + 1}.${inlineKind(slot)}`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
+    const object = await inlineAsset(env,savedArticle,i,slot);
+    if (object && object.size <= 6000000) files[`inline-${i + 1}.${inlineAssetKind(slot,article.output_format)}`] = [new Uint8Array(await object.arrayBuffer()), { level: 0 }];
   }
-  if (inline?.slots.length) files["inline-images.txt"] = strToU8("Inline visuals are included as inline-N.png or inline-N.svg. Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n");
+  if (inline?.slots.length) files["inline-images.txt"] = strToU8(`Inline visuals are included as ${format==="html" ? "inline-N.png for WordPress compatibility. Original SVG diagrams are retained privately; conversion preserves their labels and layout without another image-model call." : "inline-N.png or inline-N.svg."} Keep these alongside the article file, or upload them to your website/email media library and replace the image paths. They are generated illustrations, not documentary evidence.\n`);
   const uploads = runImages(run);
   if (uploads.length) {
     for (const image of uploads) {
