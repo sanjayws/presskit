@@ -3,8 +3,10 @@ import type { Env } from "../env";
 import type { Article } from "../db/repos";
 import { RetryableError, StageBusyError } from "../errors";
 import { sha256Hex } from "../grounding/ingest";
+import { inspectPng } from "./png";
 
 const MAX_PNG_BYTES=6_000_000;
+const CONVERTER_VERSION="complete-raster-v2";
 export class PngConversionError extends RetryableError {
   constructor(message="PNG conversion is temporarily unavailable. Your original diagram and article are kept. Try copying or downloading again shortly.") { super(message); }
 }
@@ -29,13 +31,11 @@ async function readPng(response:Response,width:number,height:number):Promise<Uin
   const reader=response.body?.getReader();if (!reader) throw new PngConversionError();
   const chunks:Uint8Array[]=[];let total=0;
   try {
-    for (;;) { const {done,value}=await reader.read();if (done) break;total+=value.byteLength;if (total>MAX_PNG_BYTES) throw new PngConversionError();chunks.push(value); }
+    for (;;) { const {done,value}=await reader.read();if (done) break;total+=value.byteLength;if (total>MAX_PNG_BYTES) throw new PngConversionError();chunks.push(value.slice()); }
   } catch(error) { await reader.cancel().catch(()=>undefined);throw error; }
   finally { reader.releaseLock(); }
   const bytes=new Uint8Array(total);let offset=0;for (const chunk of chunks) { bytes.set(chunk,offset);offset+=chunk.length; }
-  const signature=[137,80,78,71,13,10,26,10];
-  if (bytes.length<33 || !signature.every((b,i)=>bytes[i]===b) || new TextDecoder().decode(bytes.subarray(12,16))!=="IHDR") throw new PngConversionError();
-  const view=new DataView(bytes.buffer);if (view.getUint32(16)!==width || view.getUint32(20)!==height) throw new PngConversionError();
+  const size=inspectPng(bytes);if (size.width!==width || size.height!==height) throw new PngConversionError();
   return bytes;
 }
 async function renderPng(env:Env,svg:string):Promise<{bytes:Uint8Array;width:number;height:number}> {
@@ -63,7 +63,7 @@ export async function ensureInlinePng(env:Env,articleId:string,slot:number,allow
   const svg=await source.text(),sourceHash=await sha256Hex(svg);
   const cached=async()=>{
     const object=await env.ASSETS.get(pngKey);
-    if (object && object.size<=MAX_PNG_BYTES && object.httpMetadata?.contentType==="image/png" && object.customMetadata?.sourceHash===sourceHash) return object;
+    if (object && object.size<=MAX_PNG_BYTES && object.httpMetadata?.contentType==="image/png" && object.customMetadata?.sourceHash===sourceHash && object.customMetadata?.converterVersion===CONVERTER_VERSION) return object;
     await object?.body.cancel();return null;
   };
   const existing=await cached();if (existing) return existing;
@@ -79,7 +79,7 @@ export async function ensureInlinePng(env:Env,articleId:string,slot:number,allow
     const current=await env.ASSETS.head(`${prefix}.svg`);
     const lease=await env.DB.prepare("SELECT owner FROM image_read_leases WHERE asset_key=? AND lease_until>?").bind(leaseKey,Date.now()).first<{owner:string}>();
     if (current?.etag!==source.etag || lease?.owner!==owner) throw new PngConversionError();
-    await env.ASSETS.put(pngKey,bytes,{httpMetadata:{contentType:"image/png"},customMetadata:{sourceHash,convertedFrom:"svg",width:String(width),height:String(height)}});
+    await env.ASSETS.put(pngKey,bytes,{httpMetadata:{contentType:"image/png"},customMetadata:{sourceHash,convertedFrom:"svg",converterVersion:CONVERTER_VERSION,width:String(width),height:String(height)}});
     const result=await cached();if (!result) throw new PngConversionError();return result;
   } finally { await env.DB.prepare("DELETE FROM image_read_leases WHERE asset_key=? AND owner=?").bind(leaseKey,owner).run(); }
 }

@@ -7,17 +7,19 @@ import { users,campaigns,runs,articles } from "../src/db/repos";
 import { inlineImageStep,loadInline,inlineKey,inlineUrl,exportInlineHtml,stripInline,type InlineManifest } from "../src/images/inline";
 import { ensureInlinePng,pngDiagramPage,PngConversionError,PngConversionBusyError,wordpressInlineHtml } from "../src/images/svg-png";
 import { renderSvgDiagram } from "../src/images/svg";
+import { inspectPng } from "../src/images/png";
 import { sha256Hex } from "../src/grounding/ingest";
 import { buildBundle } from "../src/bundle/export";
 
 const source="Assess the network, then run a pilot, and review the results.";
 const diagram={layout:"flow" as const,palette:"teal" as const,nodes:[{label:"Assess the network",detail:"",sourceQuote:source},{label:"run a pilot",detail:"",sourceQuote:source},{label:"review the results",detail:"",sourceQuote:source}]};
 /** Valid compressed PNG fixture, with the exact requested raster dimensions. */
-function png(width:number,height:number):Uint8Array {
+function png(width:number,height:number,raster=new Uint8Array(height*(width*3+1)),corruptChecksum=false):Uint8Array {
   const bytes:number[]=[137,80,78,71,13,10,26,10];
   function chunk(type:string,data:Uint8Array){const payload=new Uint8Array(4+data.length);payload.set(new TextEncoder().encode(type));payload.set(data,4);let crc=0xffffffff;for(const byte of payload){crc^=byte;for(let n=0;n<8;n++)crc=crc&1 ? 0xedb88320^(crc>>>1) : crc>>>1;}crc=(crc^0xffffffff)>>>0;const append=(n:number)=>bytes.push(n>>>24&255,n>>>16&255,n>>>8&255,n&255);append(data.length);for(const byte of payload)bytes.push(byte);append(crc);}
   const header=new Uint8Array(13),view=new DataView(header.buffer);view.setUint32(0,width);view.setUint32(4,height);header[8]=8;header[9]=2;
-  chunk("IHDR",header);chunk("IDAT",zlibSync(new Uint8Array(height*(width*3+1))));chunk("IEND",new Uint8Array());return new Uint8Array(bytes);
+  const compressed=zlibSync(raster);if(corruptChecksum)compressed[compressed.length-1]=compressed[compressed.length-1]!^1;
+  chunk("IHDR",header);chunk("IDAT",compressed);chunk("IEND",new Uint8Array());return new Uint8Array(bytes);
 }
 async function fixture(){
   const email=`png-${crypto.randomUUID()}@example.com`,user=await users.upsertByEmail(env.DB,email);
@@ -82,6 +84,37 @@ describe("WordPress SVG to PNG conversion",()=>{
       f.quickAction.mockImplementation(async()=>response);await expect(ensureInlinePng(f.bindings,f.article.id,1)).rejects.toBeInstanceOf(PngConversionError);
     }
     expect(await env.ASSETS.head(inlineKey(f.article.id,1))).toBeNull();expect(()=>pngDiagramPage('<svg width="9000" height="9000"></svg>')).toThrow("dimensions");
+  });
+  it("rejects truncated and damaged rasters even when their PNG header has correct dimensions",async()=>{
+    const f=await fixture(),valid=png(f.width,f.height),corrupt=valid.slice();corrupt[45]=corrupt[45]!^1;
+    for(const bytes of [valid.subarray(0,33),valid.subarray(0,valid.length-12),corrupt,png(f.width,f.height,new Uint8Array((f.height/2)*(f.width*3+1))),png(f.width,f.height,undefined,true)]){
+      f.quickAction.mockImplementation(async()=>new Response(bytes,{headers:{"content-type":"image/png"}}));
+      await expect(ensureInlinePng(f.bindings,f.article.id,1)).rejects.toBeInstanceOf(PngConversionError);
+      expect(await env.ASSETS.head(inlineKey(f.article.id,1))).toBeNull();
+    }
+  });
+  it("copies streamed chunks before a producer can reuse their backing buffer",async()=>{
+    const f=await fixture(),bytes=png(f.width,f.height),buffer=new Uint8Array(64);let offset=0;
+    f.quickAction.mockImplementation(async()=>new Response(new ReadableStream<Uint8Array>({pull(controller){
+      if(offset===bytes.length){controller.close();return;}
+      buffer.fill(0);const part=bytes.subarray(offset,offset+buffer.length);buffer.set(part);offset+=part.length;controller.enqueue(buffer.subarray(0,part.length));
+    }},{highWaterMark:0}),{headers:{"content-type":"image/png"}}));
+    const result=await ensureInlinePng(f.bindings,f.article.id,1);expect(new Uint8Array(await result.arrayBuffer())).toEqual(bytes);
+  });
+  it("rebuilds legacy PNG caches and ZIPs from the intact SVG without changing the draft",async()=>{
+    const f=await fixture(),bad=png(f.width,f.height).slice();bad[45]=bad[45]!^1;
+    await env.ASSETS.put(inlineKey(f.article.id,1),bad,{httpMetadata:{contentType:"image/png"},customMetadata:{sourceHash:await sha256Hex(f.svg),convertedFrom:"svg"}});
+    const key=`articles/${f.article.id}/bundle.zip`;
+    await env.ASSETS.put(key,"cached damaged bundle",{customMetadata:{bundleVersion:"wordpress-inline-png-2026-10-28.1"}});await articles.update(env.DB,f.article.id,{bundle_r2_key:key});
+    const ctx=createExecutionContext(),response=await worker.fetch(new Request(`https://x.test/articles/${f.article.id}/bundle.zip`),f.bindings,ctx);
+    expect(response.status).toBe(200);const files=unzipSync(new Uint8Array(await response.arrayBuffer()));expect(inspectPng(files["inline-1.png"]!)).toEqual({width:f.width,height:f.height});await waitOnExecutionContext(ctx);
+    const preview=await worker.fetch(new Request(`https://x.test${inlineUrl(f.article.id,1)}`),f.bindings);expect(inspectPng(new Uint8Array(await preview.arrayBuffer()))).toEqual({width:f.width,height:f.height});
+    expect(f.quickAction).toHaveBeenCalledOnce();expect((await articles.get(env.DB,f.article.id))?.body_html).toBe(f.article.body_html);expect(await (await env.ASSETS.get(inlineKey(f.article.id,1,"svg")))!.text()).toBe(f.svg);
+  });
+  it("validates full scanlines and bounds decompression to declared dimensions",()=>{
+    expect(inspectPng(png(3,2))).toEqual({width:3,height:2});
+    for(const raster of [new Uint8Array(9),new Uint8Array(1000000),new Uint8Array([5,0,0,0])])expect(()=>inspectPng(png(1,1,raster))).toThrow();
+    expect(()=>inspectPng(png(1,1,undefined,true))).toThrow();
   });
   it("shares a conversion lease instead of billing concurrent requests twice",async()=>{
     const f=await fixture();let release!:(r:Response)=>void,started!:()=>void;const entered=new Promise<void>(resolve=>started=resolve);
