@@ -928,13 +928,13 @@ app.get("/articles/:id/seo", async (c) => {
 
 app.get("/articles/:id/inline-images/:file", async (c) => {
   const article = await articles.getForUser(c.env.DB, c.req.param("id"), c.get("user").id);
-  const slot = /^([1-3])\.(png|svg)$/.exec(c.req.param("file"));
+  const slot = /^([1-3])\.(png|svg|gif)$/.exec(c.req.param("file"));
   if (!article || !slot) return c.notFound();
   const manifest=slot[2]==="png" && article.output_format==="html" ? await loadInline(c.env,article.id) : null;
   const original=manifest?.slots[Number(slot[1])-1];
-  const object = original?.kind==="svg" && original.state==="ready" ? await ensureInlinePng(c.env,article.id,Number(slot[1])) : await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg"));
+  const object = original?.kind==="svg" && original.state==="ready" ? await ensureInlinePng(c.env,article.id,Number(slot[1])) : await c.env.ASSETS.get(inlineKey(article.id, Number(slot[1]), slot[2] as "png" | "svg" | "gif"));
   if (!object) return c.notFound();
-  return new Response(object.body, { headers: { "content-type": slot[2] === "svg" ? "image/svg+xml" : "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
+  return new Response(object.body, { headers: { "content-type": slot[2] === "svg" ? "image/svg+xml" : slot[2]==="gif" ? "image/gif" : "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
 });
 
 app.get("/articles/:id/uploaded-images/:imageId", async (c) => {

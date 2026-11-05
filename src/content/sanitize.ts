@@ -8,7 +8,7 @@
 const ALLOWED_TAGS = new Set([
   "p", "h2", "h3", "h4", "ul", "ol", "li", "blockquote", "a",
   "strong", "em", "b", "i", "br", "table", "thead", "tbody", "tr",
-  "th", "td", "caption", "code", "pre", "hr", "figure", "img",
+  "th", "td", "caption", "code", "pre", "hr", "figure", "img", "picture", "source",
 ]);
 
 // Removed entirely, including their contents.
@@ -21,6 +21,7 @@ const DANGEROUS_TAGS = new Set([
 // Per-tag allowed attributes. Everything else (class, id, style, on*, etc.) dropped.
 const ATTR_ALLOW: Record<string, Set<string>> = {
   img: new Set(["src", "alt", "loading", "width", "height", "decoding"]),
+  source: new Set(["srcset","media"]),
   figure: new Set(["data-presskit-inline", "data-presskit-upload"]),
   a: new Set(["href", "title"]),
   th: new Set(["colspan", "rowspan"]),
@@ -50,7 +51,8 @@ export async function sanitizeHtml(html: string, articleId?: string, uploadedIds
         el.removeAndKeepContent(); // unwrap unknown tags, keep their text
         return;
       }
-      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => ["png", "svg"].some((kind) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.${kind}`)) && !uploadedIds.some((id) => /^upl_[a-f0-9]{32}$/.test(id) && ["","/enhanced.png"].some((suffix) => el.getAttribute("src") === `/articles/${articleId}/uploaded-images/${id}${suffix}`)))) { el.remove(); return; }
+      if (tag === "img" && (!articleId || ![1, 2, 3].some((slot) => ["png", "svg", "gif"].some((kind) => el.getAttribute("src") === `/articles/${articleId}/inline-images/${slot}.${kind}`)) && !uploadedIds.some((id) => /^upl_[a-f0-9]{32}$/.test(id) && ["","/enhanced.png"].some((suffix) => el.getAttribute("src") === `/articles/${articleId}/uploaded-images/${id}${suffix}`)))) { el.remove(); return; }
+      if(tag==="source" && (!articleId || el.getAttribute("media")!=="(prefers-reduced-motion: reduce)" || ![1,2,3].some(slot=>el.getAttribute("srcset")===`/articles/${articleId}/inline-images/${slot}.png`))){el.remove();return;}
       if (tag === "figure" && !/^[1-3]$/.test(el.getAttribute("data-presskit-inline") || "")) el.removeAttribute("data-presskit-inline");
       if (tag === "figure" && !uploadedIds.includes(el.getAttribute("data-presskit-upload") || "")) el.removeAttribute("data-presskit-upload");
       const allow = ATTR_ALLOW[tag] ?? EMPTY;

@@ -75,7 +75,7 @@ describe("native inline SVG diagrams", () => {
     await env.DB.prepare("UPDATE campaigns SET user_id=? WHERE id=?").bind(other.id, f.campaign.id).run();
     expect((await SELF.fetch(`https://x.test${inlineUrl(article.id, 1, "svg")}`)).status).toBe(404);
   });
-  it("keeps Markdown SVG paths portable and constrains email/Word planning to PNG", async () => {
+  it("keeps Markdown SVG paths portable and uses raster formats for email/Word", async () => {
     const f = await fixture("markdown"); reply({ images: [illustration] });
     await inlineImageStep(env, f.article, f.campaign); reply(diagram);
     await inlineImageStep(env, f.article, f.campaign); await inlineImageStep(env, f.article, f.campaign);
@@ -86,7 +86,7 @@ describe("native inline SVG diagrams", () => {
       const item = await fixture(format);
       reply({ images: [{ ...illustration, kind: "png" }] }, (body) => {
         const schema = JSON.parse(body).output_config.format.schema;
-        return JSON.stringify(schema.properties.images.items.properties.kind.enum) === '["png"]';
+        return JSON.stringify(schema.properties.images.items.properties.kind.enum) === (format==="email" ? '["png","gif"]' : '["png"]');
       });
       await inlineImageStep(env, item.article, item.campaign);
       expect((await loadInline(env, item.article.id))?.slots[0]?.kind).toBe("png");

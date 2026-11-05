@@ -4,6 +4,7 @@ import { RetryableError, isRetryableStatus } from "../errors";
 import { logEvent } from "../log";
 import { validatedImageMime } from "../content/validate";
 import { readJsonBounded, recordOf } from "../providers/http";
+import { prepareMotion, InvalidMotionError, MOTION_SIZE, MOTION_FRAMES, MOTION_FRAME_MS, supportsMotionModel, type MotionRaster } from "../images/gif";
 
 export interface GeneratedImage {
   bytes: Uint8Array;
@@ -16,7 +17,7 @@ export function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
-export async function generateImage(env: Env, prompt: string, size: "1536x1024" | "1024x1024" = "1536x1024"): Promise<GeneratedImage> {
+async function generation(env: Env, prompt: string, size: "1536x1024" | "1024x1024" | "512x512", format:"png"|"gif"): Promise<GeneratedImage> {
   if (!env.OPENAI_API_KEY) throw new Error("OpenAI image generation is not configured");
   const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
   const quality = ["low", "medium", "high"].includes(env.OPENAI_IMAGE_QUALITY)
@@ -29,7 +30,8 @@ export async function generateImage(env: Env, prompt: string, size: "1536x1024" 
       headers: { "content-type": "application/json", authorization: `Bearer ${env.OPENAI_API_KEY}` },
       body: JSON.stringify({
         model, prompt, n: 1, size, quality,
-        output_format: "png", background: "opaque", moderation: "auto",
+        output_format: format, background: "opaque", moderation: "auto",
+        ...(format==="gif" ? {frame_count:MOTION_FRAMES,frame_duration_ms:MOTION_FRAME_MS} : {}),
       }),
       signal: AbortSignal.timeout(120_000),
     });
@@ -49,6 +51,7 @@ export async function generateImage(env: Env, prompt: string, size: "1536x1024" 
     const message = code === "moderation_blocked"
       ? "The image brief could not be processed. Revise it and try again."
       : `OpenAI image generation failed (${response.status}, ${code})`;
+    if(format==="gif" && response.status===400 && code!=="moderation_blocked" && (["output_format","frame_count","frame_duration_ms"].includes(param || "") || ["unsupported_output_format","unsupported_format"].includes(code)))throw new InvalidMotionError();
     if (isRetryableStatus(response.status) && code !== "insufficient_quota" && code !== "moderation_blocked") {
       throw new RetryableError(message);
     }
@@ -56,16 +59,25 @@ export async function generateImage(env: Env, prompt: string, size: "1536x1024" 
   }
   const payload = recordOf(await readJsonBounded(response, 8_100_000));
   const first = Array.isArray(payload.data) ? recordOf(payload.data[0]) : {};
-  if (typeof first.b64_json !== "string") throw new Error("OpenAI returned no image");
-  const bytes = base64ToBytes(first.b64_json);
-  if (validatedImageMime(bytes) !== "image/png") throw new Error("OpenAI returned an invalid PNG image");
+  if (typeof first.b64_json !== "string") {if(format==="gif")throw new InvalidMotionError();throw new Error("OpenAI returned no image");}
+  let bytes:Uint8Array;
+  try{bytes=base64ToBytes(first.b64_json);}catch(error){if(format==="gif")throw new InvalidMotionError();throw error;}
+  if (format==="png" && validatedImageMime(bytes) !== "image/png") throw new Error("OpenAI returned an invalid PNG image");
   const usage = recordOf(payload.usage);
   const tokens = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
   logEvent("openai.image", {
-    model, quality, ok: true, bytes: bytes.byteLength, request_id: requestId, ms: Date.now() - startedAt,
+    model, quality, format, ok: true, bytes: bytes.byteLength, request_id: requestId, ms: Date.now() - startedAt,
     input_tokens: tokens(usage.input_tokens), output_tokens: tokens(usage.output_tokens), total_tokens: tokens(usage.total_tokens),
   });
-  return { bytes, mimeType: "image/png" };
+  return { bytes, mimeType: format==="gif" ? "image/gif" : "image/png" };
+}
+
+export function generateImage(env:Env,prompt:string,size:"1536x1024"|"1024x1024"="1536x1024"):Promise<GeneratedImage>{return generation(env,prompt,size,"png");}
+
+export async function generateMotionImage(env:Env,prompt:string):Promise<MotionRaster & {original:Uint8Array}>{
+  if(!supportsMotionModel(env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst"))throw new InvalidMotionError();
+  const {bytes:original}=await generation(env,prompt,MOTION_SIZE,"gif");
+  return {...prepareMotion(original),original};
 }
 
 /** Reference-image editing: always send the real original, never simulate it from a text prompt. */

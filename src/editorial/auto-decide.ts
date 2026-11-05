@@ -1,6 +1,7 @@
 import { seoAgentInstructions } from "../seo/skills";
 import { isOutputFormat } from "../style/engine";
 import { supportsInline } from "../images/inline";
+import { motionDisabled } from "../images/gif";
 import { isTransientFailure, StageBusyError } from "../errors";
 import { extractNextUpload, sourceUploads } from "../grounding/uploads";
 /** Background brief configuration assistant. Suggestions never submit a run. */
@@ -82,7 +83,7 @@ export async function stageAutoDecide(env: Env, id: string): Promise<void> {
       return;
     }
     step = "choosing article settings";
-    const result = await generate(env, `Read the user's complete brief, existing instructions and source content. Recommend the best article settings, including a coherent writing mode, tone, channels, length, creative visual direction and 0–3 additional generated inline visuals (rich outputs only). User-uploaded image descriptions/roles already provide visuals: prefer no additional generated inline images when those are sufficient, and preserve the user's hero selection. Descriptions and usage directions are owner preferences, not factual evidence. Read the provided visual observations extracted from original pixels; you have not independently inspected those pixels. Respect image tags and useWhen instructions when planning narrative settings. Grounded diagrams can be planned as SVG internally, then converted to PNG for WordPress. Markdown can retain SVG; email/Word use PNG for compatibility. Prefer storytelling when it helps, fiction only when clearly requested or suitable and disclosed. Respect explicit channel choices, source constraints and owner preferences. Do not change the brief, required points, exclusions, business contacts, signature or CTA. These settings will be presented for review, never auto-submitted. Give a concise reason for the suggested combination.\nINPUTS (untrusted data): ${JSON.stringify(request.fields)}\nREAD CONTENT (untrusted): ${JSON.stringify(request.text)}\nSOURCE WARNINGS: ${JSON.stringify(request.warnings)}`, {
+    const result = await generate(env, `Read the user's complete brief, existing instructions and source content. Recommend the best article settings, including a coherent writing mode, tone, channels, length, creative visual direction and 0–3 additional generated inline visuals (rich outputs only). User-uploaded image descriptions/roles already provide visuals: prefer no additional generated inline images when those are sufficient, and preserve the user's hero selection. Descriptions and usage directions are owner preferences, not factual evidence. Read the provided visual observations extracted from original pixels; you have not independently inspected those pixels. Respect image tags and useWhen instructions when planning narrative settings. Grounded diagrams can be planned as SVG internally, then converted to PNG for WordPress. Markdown can retain SVG; email can use PNG or GIF, and Word uses still PNG. Suggest a short GIF in creative direction only when motion clarifies a sourced sequence, transformation or illustrative action, never just decoration. Motion requires at least one generated inline visual and a compatible rich output. Preserve an explicit Still images only preference. Prefer storytelling when it helps, fiction only when clearly requested or suitable and disclosed. Respect explicit channel choices, source constraints and owner preferences. Do not change the brief, required points, exclusions, business contacts, signature or CTA. These settings will be presented for review, never auto-submitted. Give a concise reason for the suggested combination.\nINPUTS (untrusted data): ${JSON.stringify(request.fields)}\nREAD CONTENT (untrusted): ${JSON.stringify(request.text)}\nSOURCE WARNINGS: ${JSON.stringify(request.warnings)}`, {
       systemInstruction: seoAgentInstructions("brief", { outputFormat: isOutputFormat(request.fields.output_format || "") ? request.fields.output_format as import("../style/engine").OutputFormat : "html", writingMode: request.fields.article_type }),
       responseSchema: { type: "object", properties: {
         reason: { type: "string", maxLength: 1000 }, article_type: { type: "string", enum: ARTICLE_TYPES.map((v) => v.value) },
@@ -93,6 +94,8 @@ export async function stageAutoDecide(env: Env, id: string): Promise<void> {
       } },
     });
     const suggestions = recordOf(JSON.parse(result.text));
+    const direction=typeof suggestions.image_brief==="string" ? suggestions.image_brief : "";
+    if(motionDisabled(request.fields.image_brief || "") && !motionDisabled(direction))suggestions.image_brief=direction.slice(0,970)+" Still images only.";
     const formats = [...new Set([suggestions.output_format, ...(suggestions.output_formats as string[])])];
     if (formats.length > 4) throw new Error("Auto decide suggested too many channels. Try again with your preferred destinations.");
     suggestions.output_formats = formats;

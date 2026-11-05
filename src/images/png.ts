@@ -1,5 +1,5 @@
 /** Validate a complete raster, not just a PNG header that browsers can partially display. */
-import { Unzlib } from "fflate";
+import { Unzlib, zlibSync } from "fflate";
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
@@ -10,6 +10,19 @@ function crc32(bytes: Uint8Array): number {
   let crc = 0xffffffff;
   for (const byte of bytes) crc = crcTable[(crc ^ byte) & 255]! ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** A first-frame still, encoded locally without a second image-model request. */
+export function rgbaPng(width:number,height:number,rgba:Uint8Array):Uint8Array {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width<1 || height<1 || width>512 || height>512 || rgba.length!==width*height*4) invalid();
+  const rows=new Uint8Array(height*(width*4+1));
+  for(let y=0;y<height;y++)rows.set(rgba.subarray(y*width*4,(y+1)*width*4),y*(width*4+1)+1);
+  const header=new Uint8Array(13),view=new DataView(header.buffer);view.setUint32(0,width);view.setUint32(4,height);header[8]=8;header[9]=6;
+  const chunks=[new Uint8Array([137,80,78,71,13,10,26,10])];
+  for(const [name,data]of [["IHDR",header],["IDAT",zlibSync(rows)],["IEND",new Uint8Array()]]as const){
+    const chunk=new Uint8Array(data.length+12),v=new DataView(chunk.buffer);v.setUint32(0,data.length);chunk.set(new TextEncoder().encode(name),4);chunk.set(data,8);v.setUint32(chunk.length-4,crc32(chunk.subarray(4,chunk.length-4)));chunks.push(chunk);
+  }
+  const bytes=new Uint8Array(chunks.reduce((n,c)=>n+c.length,0));let at=0;for(const c of chunks){bytes.set(c,at);at+=c.length;}return bytes;
 }
 
 /** Bounded streaming inflation checks every scanline, filter byte, chunk CRC and zlib checksum. */
