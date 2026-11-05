@@ -16,7 +16,7 @@ import { renderOutput, isRichFormat } from "../content/render";
 import { articleImageBriefKey } from "../images/assets";
 import { sha256Hex } from "../grounding/ingest";
 
-export const BUNDLE_VERSION = "motion-inline-2026-11-05.1";
+export const BUNDLE_VERSION = "svg-motion-2026-11-06.1";
 /** Cache identity follows saved text/metadata and the selected visual, never a static format version alone. */
 export function bundleFingerprint(article: Article): Promise<string> {
   return sha256Hex(JSON.stringify([BUNDLE_VERSION,article.id,article.run_id,article.title,article.body_html,article.excerpt,article.slug,article.meta_desc,article.key_phrases,article.output_format,article.output_body,article.png_r2_key,article.svg_r2_key]));
@@ -134,7 +134,7 @@ export async function buildBundle(env: Env, article: Article): Promise<Uint8Arra
       files[`inline-${i+1}.png`]=[new Uint8Array(await poster.arrayBuffer()),{level:0}];
     }
   }
-  if (inline?.slots.length) files["inline-images.txt"] = strToU8(`Inline visuals are included as ${format==="html" ? "inline-N.png for WordPress diagrams. Original SVG diagrams are retained privately; conversion preserves their labels and layout without another image-model call." : "inline-N.png or inline-N.svg for stills."} Motion, when selected, uses inline-N.gif plus inline-N.png (the first-frame still). GIFs play twice for at most 3.6 seconds. HTML prefers the PNG when reduced motion is requested; use the PNG wherever animation is unsuitable. Keep files alongside the article, or upload them to your website/email media library and replace paths. In WordPress insert the original GIF at Full Size; resized thumbnails may be static. They are generated illustrations, not documentary evidence.\n`);
+  if (inline?.slots.length) files["inline-images.txt"] = strToU8(`Inline visuals are included as ${format==="html" ? "inline-N.png for WordPress diagrams. Original SVG diagrams are retained privately; conversion preserves their labels and layout without another image-model call." : "inline-N.png or inline-N.svg for vector diagrams."} Editable SVGs can be static or use finite, script-free focus highlights; Markdown keeps the SVG. WordPress uses the still PNG; download an editable SVG separately from the result screen. GIF motion, when selected, uses inline-N.gif plus inline-N.png (the first-frame still). GIFs play twice for at most 3.6 seconds. HTML prefers the PNG when reduced motion is requested; use the PNG wherever animation is unsuitable. Keep files alongside the article, or upload them to your website/email media library and replace paths. In WordPress insert the original GIF at Full Size; resized thumbnails may be static. They are generated illustrations, not documentary evidence.\n`);
   const uploads = runImages(run);
   if (uploads.length) {
     for (const image of uploads) {

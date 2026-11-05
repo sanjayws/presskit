@@ -50,8 +50,12 @@ function lines(text: string, maxChars: number): string[] {
 function textBlock(text: string, x: number, y: number, maxChars: number, fontSize: number, fill: string, weight = 400): string {
   return `<text x="${x}" y="${y}" font-size="${fontSize}" font-weight="${weight}" fill="${fill}">${lines(text, maxChars).map((line, i) => `<tspan x="${x}" dy="${i ? Math.round(fontSize * 1.35) : 0}">${xml(line)}</tspan>`).join("")}</text>`;
 }
-/** No scripts, style elements, links, external resources, foreignObject or untrusted attributes. */
-export function renderSvgDiagram(diagram: SvgDiagram, alt: string): string {
+/** Strip only application-owned motion layers; labels and geometry stay identical. */
+export function staticSvgDiagram(svg:string):string {
+  return svg.replace(/<g data-presskit-svg-motion="1"[^>]*>[\s\S]*?<\/g>/g,"").replace(/<style data-presskit-svg-motion="1">[\s\S]*?<\/style>/g,"");
+}
+/** All geometry, motion and optional reduced-motion CSS are application-owned. No scripts or external resources. */
+export function renderSvgDiagram(diagram: SvgDiagram, alt: string, motion=false): string {
   const colour = { teal: "#087f8c", blue: "#2459a6", violet: "#6941a5", amber: "#925b12" }[diagram.palette];
   const cards = diagram.layout === "cards";
   const width = 1200;
@@ -78,7 +82,8 @@ export function renderSvgDiagram(diagram: SvgDiagram, alt: string): string {
     return `${connector}<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="#ffffff" stroke="#c7d9e2" stroke-width="2"/>
 ${!cards ? `<circle cx="108" cy="${y + 34}" r="22" fill="${colour}"/><text x="108" y="${y + 42}" text-anchor="middle" font-size="22" font-weight="700" fill="#ffffff">${i + 1}</text>` : `<rect x="${x}" y="${y + 22}" width="6" height="44" rx="3" fill="${colour}"/>`}
 ${textBlock(node.label, x + 28, y + 42, labelChars, 28, "#17344b", 700)}
-${node.detail ? textBlock(node.detail, x + 28, y + 42 + labelLines * 38 + 10, detailChars, 21, "#435e70") : ""}`;
+${node.detail ? textBlock(node.detail, x + 28, y + 42 + labelLines * 38 + 10, detailChars, 21, "#435e70") : ""}
+${motion ? `<g data-presskit-svg-motion="1" class="pk-vector-motion" aria-hidden="true"><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="none" stroke="${colour}" stroke-width="5" opacity="0"><animate attributeName="opacity" values="0;0.8;0" keyTimes="0;0.5;1" begin="${(i*.12).toFixed(2)}s" dur="1.8s" repeatCount="2" fill="freeze"/></rect></g>` : ""}`;
   }).join("");
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="diagram-title"><title id="diagram-title">${xml(alt)}</title><rect width="${width}" height="${height}" rx="24" fill="#f0f6fa"/><g font-family="Arial, Helvetica, sans-serif">${content}</g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="diagram-title"><title id="diagram-title">${xml(alt)}</title>${motion ? '<style data-presskit-svg-motion="1">@media (prefers-reduced-motion: reduce){.pk-vector-motion{display:none}}</style>' : ""}<rect width="${width}" height="${height}" rx="24" fill="#f0f6fa"/><g font-family="Arial, Helvetica, sans-serif">${content}</g></svg>`;
 }

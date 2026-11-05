@@ -4,6 +4,7 @@ import type { Article } from "../db/repos";
 import { RetryableError, StageBusyError } from "../errors";
 import { sha256Hex } from "../grounding/ingest";
 import { inspectPng } from "./png";
+import { staticSvgDiagram } from "./svg";
 
 const MAX_PNG_BYTES=6_000_000;
 const CONVERTER_VERSION="complete-raster-v2";
@@ -19,7 +20,7 @@ export function pngDiagramPage(svg:string):{html:string;width:number;height:numb
   const width=Number(/\bwidth="([0-9]+)"/.exec(root?.[1] || "")?.[1]);
   const height=Number(/\bheight="([0-9]+)"/.exec(root?.[1] || "")?.[1]);
   if (!root || !svg.trim().endsWith("</svg>") || width<1 || height<1 || width>2048 || height>8192 || !Number.isInteger(width) || !Number.isInteger(height) || width*height>12_000_000) throw new PngConversionError("The saved diagram has invalid dimensions. The article is kept; download the original diagram for inspection.");
-  let binary="";for (const byte of new TextEncoder().encode(svg)) binary+=String.fromCharCode(byte);
+  let binary="";for (const byte of new TextEncoder().encode(staticSvgDiagram(svg))) binary+=String.fromCharCode(byte);
   // SVG is loaded as an image, never inserted as active HTML. No script or network access.
   const html=`<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><style>html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden}img{display:block;width:${width}px;height:${height}px}</style></head><body><img id="diagram" width="${width}" height="${height}" src="data:image/svg+xml;base64,${btoa(binary)}" alt=""></body></html>`;
   return {html,width,height};
