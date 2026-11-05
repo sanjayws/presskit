@@ -18,7 +18,7 @@ export function base64ToBytes(b64: string): Uint8Array {
 
 export async function generateImage(env: Env, prompt: string, size: "1536x1024" | "1024x1024" = "1536x1024"): Promise<GeneratedImage> {
   if (!env.OPENAI_API_KEY) throw new Error("OpenAI image generation is not configured");
-  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-sunburst";
+  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
   const quality = ["low", "medium", "high"].includes(env.OPENAI_IMAGE_QUALITY)
     ? env.OPENAI_IMAGE_QUALITY : "medium";
   const startedAt = Date.now();
@@ -71,7 +71,7 @@ export async function generateImage(env: Env, prompt: string, size: "1536x1024" 
 /** Reference-image editing: always send the real original, never simulate it from a text prompt. */
 export async function enhanceImage(env: Env, source: { data: Uint8Array; contentType: string }, prompt: string, size: "1536x1024" | "1024x1024"): Promise<GeneratedImage> {
   if (!env.OPENAI_API_KEY) throw new Error("OpenAI image editing is not configured.");
-  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-sunburst";
+  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
   const quality = ["low","medium","high"].includes(env.OPENAI_IMAGE_QUALITY) ? env.OPENAI_IMAGE_QUALITY : "medium";
   const form = new FormData();
   form.set("model",model); form.set("n","1"); form.set("prompt",prompt); form.set("size",size); form.set("quality",quality); form.set("output_format","png");

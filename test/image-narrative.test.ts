@@ -115,7 +115,7 @@ describe("optional original-image presentation edits",()=>{
     const f=await fixture(true);await seedReading(f);
     opusReply({placements:[{imageId:f.image.id,afterParagraph:2,enhance:true,enhancementPrompt:"Place the complete original screenshot on a clean editorial mat with generous padding."}]},(body)=>body.includes("Use this when explaining")&&body.includes("Route to Sales")&&body.includes("mayEnhance"));
     expect(await uploadedImageStep(f.bindings,f.article,f.run)).toBe(false);
-    fetchMock.get("https://api.openai.com").intercept({path:"/v1/images/edits",method:"POST",body:(body)=>String(body).includes('name="image"')&&String(body).includes("IHDR")&&String(body).includes("gpt-image-2.5-sunburst")}).reply(200,{data:[{b64_json:png}]});
+    fetchMock.get("https://api.openai.com").intercept({path:"/v1/images/edits",method:"POST",body:(body)=>String(body).includes('name="image"')&&String(body).includes("IHDR")&&String(body).includes("gpt-image-2.6-sunburst")}).reply(200,{data:[{b64_json:png}]});
     expect(await uploadedImageStep(f.bindings,f.article,f.run)).toBe(false);expect(await uploadedImageStep(f.bindings,f.article,f.run)).toBe(true);
     let article=(await articles.get(env.DB,f.article.id))!;expect(article.body_html).toContain(enhancedImageUrl(article.id,f.image));expect(new Uint8Array(await (await env.ASSETS.get(f.image.r2_key))!.arrayBuffer())).toEqual(bytes());
     expect(await sanitizeHtml(article.body_html,article.id,[f.image.id])).toContain(enhancedImageUrl(article.id,f.image));

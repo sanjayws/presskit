@@ -124,7 +124,16 @@ Set `READY_EMAIL_ENABLED` to `"true"`, add `POSTMARK_TOKEN` and `POSTMARK_FROM` 
 
 ## Models and limits
 
-The supplied configuration retains these model choices: Anthropic `claude-opus-5-5` with low effort for planning/writing/review/image suggestions; OpenAI `gpt-6-luna` for readiness and document extraction; OpenAI `gpt-image-2.5-sunburst` for images. **Availability depends on your provider account.** These are configuration choices, not a promise that every account can access them. Changing model IDs alone may not make other models compatible with the response schemas, tools or reasoning settings. Readiness currently uses a fixed Luna ID; its Decisions endpoint falls back to structured Responses when the endpoint is unsupported.
+The supplied configuration retains these model choices: Anthropic `claude-opus-5-5` with low effort for planning/writing/review/image suggestions; OpenAI `gpt-6-luna` for readiness and document extraction; OpenAI `gpt-image-2.6-sunburst` for images. **Availability depends on your provider account.** These are configuration choices, not a promise that every account can access them. Changing model IDs alone may not make other models compatible with the response schemas, tools or reasoning settings. Readiness currently uses a fixed Luna ID; its Decisions endpoint falls back to structured Responses when the endpoint is unsupported.
+
+Images default to `gpt-image-2.6-sunburst` for detailed compositions and presentation edits. Set `vars.OPENAI_IMAGE_MODEL` to `gpt-image-2.6-flare` for faster iteration; the setting applies to hero images, generated inline scenes and opted-in image edits. Both use the existing `OPENAI_API_KEY` and Image API endpoints. Medium quality, PNG output, destination dimensions, padding and retry limits stay configured as before; complexity is omitted to use the provider default. Saved images remain available without regeneration. When upgrading an existing deployment, update the variable explicitly even when using `--keep-vars`:
+
+```bash
+npx wrangler deploy --keep-vars --var OPENAI_IMAGE_MODEL:gpt-image-2.6-sunburst
+# Alternative: --var OPENAI_IMAGE_MODEL:gpt-image-2.6-flare
+```
+
+See OpenAI’s [GPT Image 2.6 migration guidance](https://developers.openai.com/api/docs/guides/image-prompting#migrate-an-existing-workflow). This upgrade requires no new secret, package, binding or migration.
 
 | Input | Limit |
 |---|---|

@@ -61,7 +61,8 @@
     "ANTHROPIC_MODEL": "claude-opus-5-5",
     "ANTHROPIC_EFFORT": "low",
     "OPENAI_DOCUMENT_MODEL": "gpt-6-luna",
-    "OPENAI_IMAGE_MODEL": "gpt-image-2.5-sunburst",
+    // Use gpt-image-2.6-flare instead for faster iteration.
+    "OPENAI_IMAGE_MODEL": "gpt-image-2.6-sunburst",
     "OPENAI_IMAGE_QUALITY": "medium",
     "READY_EMAIL_ENABLED": "false",
     "GOOGLE_CLIENT_ID": "",

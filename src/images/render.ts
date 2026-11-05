@@ -25,7 +25,7 @@ export async function renderFeaturedVisual(env: Env, article: Article, campaign:
     styleDirection: optionInstruction(IMAGE_STYLES, campaign?.image_style ?? ""),
     outputFormat: isOutputFormat(article.output_format) ? article.output_format : "html" as const,
   };
-  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-sunburst";
+  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2.6-sunburst";
   const planner = { provider: "anthropic", model: env.ANTHROPIC_MODEL || "claude-opus-5-5", effort: env.ANTHROPIC_EFFORT || "low" };
   const inputHash = await sha256Hex(JSON.stringify({ input, planner }));
   let planned: Awaited<ReturnType<typeof planFeaturedImage>> | undefined;

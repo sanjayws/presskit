@@ -16,7 +16,7 @@ export default defineConfig({
         ANTHROPIC_MODEL: "claude-opus-5-5",
         ANTHROPIC_EFFORT: "low",
         OPENAI_DOCUMENT_MODEL: "gpt-6-luna",
-        OPENAI_IMAGE_MODEL: "gpt-image-2.5-sunburst",
+        OPENAI_IMAGE_MODEL: "gpt-image-2.6-sunburst",
         OPENAI_IMAGE_QUALITY: "medium",
         OPENAI_API_KEY: "test-openai-key",
         ANTHROPIC_API_KEY: "test-anthropic-key",

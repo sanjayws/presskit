@@ -2,7 +2,7 @@ import { creativeDirection } from "./image-fixture";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { env, createMessageBatch } from "cloudflare:test";
 import { fetchMock } from "./network";
-import { base64ToBytes, generateImage } from "../src/openai/image";
+import { base64ToBytes, generateImage, enhanceImage } from "../src/openai/image";
 import { featuredImagePrompt, planFeaturedImage, validateComposition } from "../src/images/brief";
 import { RetryableError } from "../src/errors";
 import { articles, campaigns, runs, users } from "../src/db/repos";
@@ -166,19 +166,40 @@ describe("OpenAI image integration", () => {
     expect(result.composition.points).toHaveLength(2);
     expect(result.prompt).toContain("Assess your network");
   });
-  it("uses Sunburst, one medium-quality landscape PNG, moderation, and the OpenAI secret", async () => {
+  it.each(["gpt-image-2.6-sunburst", "gpt-image-2.6-flare"])("uses %s for one medium-quality landscape PNG with moderation", async (model) => {
     fetchMock.get("https://api.openai.com").intercept({
       path: "/v1/images/generations", method: "POST",
       headers: { authorization: "Bearer test-openai-key" },
       body: (body) => {
         const value = JSON.parse(String(body));
-        return value.model === "gpt-image-2.5-sunburst" && value.quality === "medium"
+        return value.model === model && value.quality === "medium" && !("complexity" in value)
           && value.size === "1536x1024" && value.n === 1 && value.moderation === "auto" && value.output_format === "png";
       },
     }).reply(200, { data: [{ b64_json: png }] });
-    const image = await generateImage(env, "Evidence-backed infographic");
+    const image = await generateImage({ ...env, OPENAI_IMAGE_MODEL: model }, "Evidence-backed infographic");
     expect(image.mimeType).toBe("image/png");
     expect(image.bytes[0]).toBe(0x89);
+  });
+  it("uses Sunburst 2.6 when the image model setting is empty", async () => {
+    fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST",
+      body: (body) => JSON.parse(String(body)).model === "gpt-image-2.6-sunburst",
+    }).reply(200, { data: [{ b64_json: png }] });
+    expect((await generateImage({ ...env, OPENAI_IMAGE_MODEL: "" }, "A clear editorial visual")).mimeType).toBe("image/png");
+  });
+  it.each(["gpt-image-2.6-sunburst", "gpt-image-2.6-flare", ""])("uses the configured 2.6 model (%s) for original-image edits", async (configured) => {
+    const model = configured || "gpt-image-2.6-sunburst";
+    fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/edits", method: "POST",
+      headers: { authorization: "Bearer test-openai-key" },
+      body: (body) => {
+        const form = String(body);
+        return form.includes(`name="model"\r\n\r\n${model}\r\n`) && form.includes('name="quality"\r\n\r\nmedium\r\n')
+          && form.includes('name="size"\r\n\r\n1024x1024\r\n') && form.includes('name="output_format"\r\n\r\npng\r\n')
+          && form.includes('name="image"; filename="original-image.png"') && form.includes("IHDR") && !form.includes('name="complexity"');
+      },
+    }).reply(200, { data: [{ b64_json: png }] });
+    const source = base64ToBytes(png), before = source.slice();
+    const edited = await enhanceImage({ ...env, OPENAI_IMAGE_MODEL: configured }, { data: source, contentType: "image/png" }, "Add a clean frame and preserve all original content.", "1024x1024");
+    expect(edited.mimeType).toBe("image/png"); expect(source).toEqual(before);
   });
   it("retries rate limits without exposing provider messages", async () => {
     fetchMock.get("https://api.openai.com").intercept({ path: "/v1/images/generations", method: "POST" })
